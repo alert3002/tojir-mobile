@@ -78,25 +78,35 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
 
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
+    // Push stack removed from the app — keep the toggle off to avoid confusing UX.
+    await p.setString(kPushPrefKey, '0');
     if (!mounted) return;
-    setState(() => pushOn = p.getString(kPushPrefKey) != '0');
+    setState(() => pushOn = false);
   }
 
   Future<void> _setPush(bool v) async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString(kPushPrefKey, v ? '1' : '0');
-    if (!mounted) return;
-    setState(() => pushOn = v);
     final api = context.read<ApiClient>();
     if (v) {
-      await PushService.instance.requestNotificationPermissionAndRegister(context, api);
-    } else {
-      await PushService.instance.unregisterFromServer(api);
+      // Push (FCM) removed from the app build — keep toggle off and explain.
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Push выключен, токен удалён с сервера')),
+          const SnackBar(
+            content: Text('Push в этом билде недоступен (Firebase удалён). История уведомлений ниже работает.'),
+          ),
         );
       }
+      return;
+    }
+
+    final p = await SharedPreferences.getInstance();
+    await p.setString(kPushPrefKey, '0');
+    if (!mounted) return;
+    setState(() => pushOn = false);
+    await PushService.instance.unregisterFromServer(api);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Push выключен')),
+      );
     }
   }
 
@@ -198,7 +208,7 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
               ),
               const SizedBox(height: 6),
               Text(
-                'Включите push — придут оповещения на телефон (в т.ч. когда в магазине осталось ≤5 ед. товара). Ниже — история уведомлений с сервера.',
+                'Мобильные push (FCM) в этом билде отключены. Ниже — история уведомлений с сервера (как во вебе).',
                 style: TextStyle(fontSize: 13, height: 1.35, color: cs.onSurfaceVariant),
               ),
               const SizedBox(height: 14),
@@ -215,7 +225,7 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
                           children: [
                             Text('Push-уведомления', style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface)),
                             Text(
-                              'Продажи, остатки, долги, курс. Система может запросить разрешение на уведомления.',
+                              'Раньше здесь подключался push через Firebase — сейчас он убран из проекта.',
                               style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.3),
                             ),
                           ],
