@@ -1,0 +1,14 @@
+## Android release signing (DO NOT COMMIT real secrets)
+#
+# 1) Create a keystore:
+#    keytool -genkeypair -v -storetype JKS -keystore tojir-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias tojir
+#
+# 2) Put the keystore somewhere safe (example: mobile/android/keystore/tojir-release.jks)
+#
+# 3) Copy this file to `key.properties` and fill values:
+#
+storeFile=keystore/tojir-release.jks
+storePassword=CHANGE_ME
+keyAlias=tojir
+keyPassword=CHANGE_ME
+

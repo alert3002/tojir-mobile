@@ -1,0 +1,195 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+
+import '../services/api_client.dart';
+import '../services/auth_storage.dart';
+import '../services/push_service.dart';
+
+class SessionController extends ChangeNotifier {
+  SessionController(this._storage, this._api);
+
+  final AuthStorage _storage;
+  final ApiClient _api;
+
+  Map<String, dynamic>? _user;
+  bool _ready = false;
+  String? _bootstrapError;
+
+  Map<String, dynamic>? get user => _user;
+  bool get isReady => _ready;
+  bool get isLoggedIn => _user != null;
+  String? get bootstrapError => _bootstrapError;
+
+  String? get displayName {
+    final u = _user;
+    if (u == null) return null;
+    final fn = (u['first_name'] as String?)?.trim() ?? '';
+    final ln = (u['last_name'] as String?)?.trim() ?? '';
+    final full = '$fn $ln'.trim();
+    if (full.isNotEmpty) return full;
+    return u['phone'] as String?;
+  }
+
+  String? get role => _user?['role'] as String?;
+
+  /// Загрузка профиля при старте (если есть access token).
+  Future<void> bootstrap() async {
+    _ready = false;
+    _bootstrapError = null;
+    notifyListeners();
+
+    final token = await _storage.accessToken;
+    if (token == null || token.isEmpty) {
+      _user = null;
+      _ready = true;
+      notifyListeners();
+      return;
+    }
+
+    final cached = await _storage.userJson;
+    if (cached != null && cached.isNotEmpty) {
+      try {
+        _user = jsonDecode(cached) as Map<String, dynamic>;
+      } catch (_) {
+        _user = null;
+      }
+    }
+
+    try {
+      final res = await _api.get('me/');
+      if (res.statusCode == 200) {
+        _user = jsonDecode(res.body) as Map<String, dynamic>;
+        await _storage.setUserJson(res.body);
+      } else if (res.statusCode == 401) {
+        await _storage.clear();
+        _user = null;
+        _bootstrapError = null;
+      } else {
+        _bootstrapError = 'Профиль: ${res.statusCode}';
+      }
+    } catch (e) {
+      _bootstrapError = e.toString();
+    }
+
+    _ready = true;
+    notifyListeners();
+    if (_user != null) {
+      unawaited(PushService.instance.syncAfterLogin(_api));
+    }
+  }
+
+  Future<void> requestSmsCode(String digits9, {String registerAs = 'client'}) async {
+    final phone = digits9.replaceAll(RegExp(r'\D'), '').trim();
+    if (phone.length != 9) {
+      throw ArgumentError('Введите 9 цифр после +992');
+    }
+    try {
+      final res = await _api.post(
+        'auth/request-sms/',
+        body: {'phone': phone, 'register_as': registerAs},
+        withAuth: false,
+      );
+      if (res.statusCode != 200) {
+        throw Exception(_parseError(res.body, fallback: 'Не удалось отправить код'));
+      }
+    } on http.ClientException catch (e) {
+      throw Exception(
+        'Нет связи с сервером (часто на Flutter Web это CORS). '
+        'Решение: сервер бо DJANGO_DEBUG=1 (CORS барои localhost) ё барномаро дар Android/iOS иҷро кунед. ${e.message}',
+      );
+    }
+  }
+
+  Future<void> loginWithSms({required String digits9, required String code, String ref = ''}) async {
+    final phone = digits9.replaceAll(RegExp(r'\D'), '').trim();
+    final c = code.replaceAll(RegExp(r'\D'), '').trim();
+    if (phone.length != 9) throw ArgumentError('Введите 9 цифр после +992');
+    if (c.length != 6) throw ArgumentError('Введите 6-значный код из SMS');
+
+    late final http.Response res;
+    try {
+      res = await _api.post(
+        'auth/verify-sms/',
+        body: {'phone': phone, 'code': c, 'ref': ref.trim()},
+        withAuth: false,
+      );
+    } on http.ClientException catch (e) {
+      throw Exception(
+        'Нет связи с сервером (Flutter Web / CORS ё интернет). ${e.message}',
+      );
+    }
+    if (res.statusCode != 200) {
+      throw Exception(_parseError(res.body, fallback: 'Неверный код'));
+    }
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final access = data['access'] as String?;
+    final refresh = data['refresh'] as String?;
+    final u = data['user'];
+    if (access == null || u is! Map<String, dynamic>) {
+      throw Exception('Неверный ответ сервера');
+    }
+    await _storage.setTokens(access: access, refresh: refresh);
+    _user = u;
+    await _storage.setUserJson(jsonEncode(u));
+    notifyListeners();
+    unawaited(PushService.instance.syncAfterLogin(_api));
+  }
+
+  Future<void> loginWithPassword(String phone, String password) async {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.length < 9) {
+      throw ArgumentError('Введите номер телефона');
+    }
+    final res = await _api.post(
+      'auth/jwt/token/',
+      body: {'username': digits, 'password': password},
+      withAuth: false,
+    );
+    if (res.statusCode != 200) {
+      final err = _parseError(res.body);
+      throw Exception(err);
+    }
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final access = data['access'] as String?;
+    final refresh = data['refresh'] as String?;
+    if (access == null) throw Exception('Нет токена в ответе');
+    await _storage.setTokens(access: access, refresh: refresh);
+
+    final me = await _api.get('me/');
+    if (me.statusCode != 200) {
+      await _storage.clear();
+      throw Exception('Не удалось загрузить профиль');
+    }
+    _user = jsonDecode(me.body) as Map<String, dynamic>;
+    await _storage.setUserJson(me.body);
+    notifyListeners();
+    unawaited(PushService.instance.syncAfterLogin(_api));
+  }
+
+  Future<void> logout() async {
+    await PushService.instance.unregisterFromServer(_api);
+    await _storage.clear();
+    _user = null;
+    notifyListeners();
+  }
+
+  static String _parseError(String body, {String fallback = 'Ошибка'}) {
+    try {
+      final m = jsonDecode(body);
+      if (m is Map) {
+        final d = m['detail'];
+        if (d is String) return d;
+        final nfe = m['non_field_errors'];
+        if (nfe is List && nfe.isNotEmpty) return nfe.first.toString();
+        final p = m['phone'];
+        if (p is List && p.isNotEmpty) return p.first.toString();
+        final c = m['code'];
+        if (c is List && c.isNotEmpty) return c.first.toString();
+      }
+    } catch (_) {}
+    return fallback;
+  }
+}
