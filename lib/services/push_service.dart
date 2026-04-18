@@ -24,6 +24,7 @@ String _pushPlatformLabel() {
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  if (DefaultFirebaseOptions.isPlaceholderConfig) return;
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 }
 
@@ -36,6 +37,7 @@ class PushService {
 
   Future<bool> ensureFirebaseInitialized() async {
     if (kIsWeb) return false;
+    if (DefaultFirebaseOptions.isPlaceholderConfig) return false;
     try {
       if (Firebase.apps.isEmpty) {
         await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -166,6 +168,12 @@ class PushService {
   Future<void> unregisterFromServer(ApiClient api) async {
     if (kIsWeb) return;
     var t = _cachedToken;
+    if (DefaultFirebaseOptions.isPlaceholderConfig) {
+      // Without Firebase we can't fetch a token; still try server cleanup if we cached one earlier.
+      if (t == null || t.isEmpty) return;
+    } else if (!await ensureFirebaseInitialized()) {
+      return;
+    }
     if (t == null || t.isEmpty) {
       try {
         t = await FirebaseMessaging.instance.getToken();
@@ -177,8 +185,10 @@ class PushService {
       } catch (_) {}
     }
     _cachedToken = null;
-    try {
-      await FirebaseMessaging.instance.deleteToken();
-    } catch (_) {}
+    if (!DefaultFirebaseOptions.isPlaceholderConfig) {
+      try {
+        await FirebaseMessaging.instance.deleteToken();
+      } catch (_) {}
+    }
   }
 }
