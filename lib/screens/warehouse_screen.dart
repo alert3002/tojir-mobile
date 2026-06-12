@@ -1,15 +1,20 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
+import '../theme/app_brand.dart';
 import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
 import '../widgets/app_scaffold.dart';
 import '../widgets/skeleton_loading.dart';
+import '../widgets/warehouse_mobile_ui.dart';
+
+const _warehouseMobilePageSize = 10;
 
 const _unitLabels = <String, String>{
   'pcs': 'шт',
@@ -35,6 +40,9 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
   List<Map<String, dynamic>> warehouses = const [];
   List<Map<String, dynamic>> products = const [];
   List<Map<String, dynamic>> warehouseOutlets = const [];
+  List<Map<String, dynamic>> categories = const [];
+  int? selectedCategoryId;
+  int mobilePage = 1;
 
   bool loadingWarehouses = false;
   bool loadingProducts = false;
@@ -44,6 +52,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
   String search = '';
   bool hideZero = true;
   bool showTrash = false;
+  String brandFilter = '';
 
   double usdToTjs = 11.5;
 
@@ -51,9 +60,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
   final TextEditingController newStoreNameCtrl = TextEditingController();
   final TextEditingController newStoreAddressCtrl = TextEditingController();
 
-  final TextEditingController editNameCtrl = TextEditingController();
   final TextEditingController editSalePriceCtrl = TextEditingController();
-  final TextEditingController editQtyCtrl = TextEditingController();
 
   Timer? _searchDebounce;
 
@@ -80,8 +87,13 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     super.initState();
     searchCtrl.addListener(_onSearchText);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is Map && args['brand'] != null) {
+        brandFilter = args['brand'].toString();
+      }
       await _loadRate();
       await _loadWarehouses();
+      await _loadCategories();
       _syncWarehouseFromUser();
       await _loadOutlets();
       await _loadProducts();
@@ -117,9 +129,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     searchCtrl.dispose();
     newStoreNameCtrl.dispose();
     newStoreAddressCtrl.dispose();
-    editNameCtrl.dispose();
     editSalePriceCtrl.dispose();
-    editQtyCtrl.dispose();
     super.dispose();
   }
 
@@ -163,6 +173,19 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     }
   }
 
+  Future<void> _loadCategories() async {
+    try {
+      final res = await context.read<ApiClient>().get('inventory/categories/');
+      if (!mounted || res.statusCode != 200) return;
+      final d = jsonDecode(res.body);
+      final list = d is List ? d : (d is Map ? (d['results'] ?? d['data']) : null);
+      final items = (list is List) ? list.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
+      setState(() => categories = items);
+    } catch (_) {
+      if (mounted) setState(() => categories = const []);
+    }
+  }
+
   Future<void> _loadOutlets() async {
     final wid = selectedWarehouseId ?? _asInt(_user?['warehouse']);
     if (wid == null) {
@@ -193,6 +216,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     try {
       final qp = <String, String>{'warehouse': wid.toString()};
       if (search.trim().isNotEmpty) qp['search'] = search.trim();
+      if (brandFilter.trim().isNotEmpty) qp['brand'] = brandFilter.trim();
+      if (selectedCategoryId != null) qp['category'] = selectedCategoryId.toString();
       if (showTrash) {
         qp['trash'] = '1';
       } else if (hideZero) {
@@ -205,15 +230,57 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
         final d = jsonDecode(res.body);
         final list = d is List ? d : (d is Map ? (d['results'] ?? d['data']) : null);
         final items = (list is List) ? list.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
-        setState(() => products = items);
+        setState(() {
+          products = items;
+          mobilePage = 1;
+        });
       } else {
-        setState(() => products = const []);
+        setState(() {
+          products = const [];
+          mobilePage = 1;
+        });
       }
     } catch (_) {
-      if (mounted) setState(() => products = const []);
+      if (mounted) {
+        setState(() {
+          products = const [];
+          mobilePage = 1;
+        });
+      }
     } finally {
       if (mounted) setState(() => loadingProducts = false);
     }
+  }
+
+  WarehouseStats? _warehouseStats() {
+    if (showTrash) return null;
+    var warehouseQty = 0.0;
+    var storeQty = 0.0;
+    var lowStock = 0;
+    for (final p in products) {
+      final wq = _asDouble(p['quantity']) ?? 0;
+      warehouseQty += wq;
+      if (wq > 0 && wq <= 5) lowStock++;
+      final summary = (p['outlets_summary'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+      storeQty += summary.fold<double>(0, (s, o) => s + (_asDouble(o['quantity']) ?? 0));
+    }
+    return WarehouseStats(
+      positions: products.length,
+      warehouseQty: warehouseQty.round(),
+      storeQty: storeQty.round(),
+      lowStock: lowStock,
+      stores: warehouseOutlets.length,
+    );
+  }
+
+  String _warehouseDisplayName(Map<String, dynamic> u) {
+    final wn = (u['warehouse_name'] as String?)?.trim();
+    if (wn != null && wn.isNotEmpty) return wn;
+    final wid = selectedWarehouseId ?? _asInt(u['warehouse']);
+    for (final w in warehouses) {
+      if (_asInt(w['id']) == wid) return (w['name'] ?? 'Склад').toString();
+    }
+    return 'Склад';
   }
 
   Future<bool> _connectStore() async {
@@ -284,22 +351,36 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     );
   }
 
+  double _costPriceTjs(Map<String, dynamic> record) {
+    final lastPrice = record['last_arrival_unit_price'] != null
+        ? (_asDouble(record['last_arrival_unit_price']) ?? 0)
+        : (_asDouble(record['cost_price']) ?? 0);
+    final lastCur = (record['last_arrival_currency'] ?? 'TJS').toString();
+    if (lastCur == 'USD' && usdToTjs > 0) return lastPrice * usdToTjs;
+    return lastPrice;
+  }
+
   void _openEdit(Map<String, dynamic> record) {
-    editNameCtrl.text = (record['name'] ?? '').toString();
-    editSalePriceCtrl.text = (_asDouble(record['sale_price']) ?? 0).toString();
-    final q0 = _asDouble(record['quantity']) ?? 0;
-    editQtyCtrl.text = q0.toStringAsFixed(q0 % 1 == 0 ? 0 : 3);
+    final sp = _asDouble(record['sale_price']);
+    if (sp != null && sp > 0) {
+      editSalePriceCtrl.text = sp == sp.truncateToDouble() ? sp.toInt().toString() : sp.toString();
+    } else {
+      editSalePriceCtrl.clear();
+    }
     final id = _asInt(record['id']);
     if (id == null) return;
+    final q0 = _asDouble(record['quantity']) ?? 0;
+    final qtyText = '${q0.toStringAsFixed(q0 % 1 == 0 ? 0 : 3)} ${_unitLabel(record['unit']?.toString())}';
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => _EditProductBottomSheet(
         productId: id,
-        nameCtrl: editNameCtrl,
+        productName: (record['name'] ?? '').toString(),
+        quantityText: qtyText,
+        costTjs: _costPriceTjs(record),
         salePriceCtrl: editSalePriceCtrl,
-        qtyCtrl: editQtyCtrl,
         usdToTjs: usdToTjs,
         api: context.read<ApiClient>(),
         onSaved: () async {
@@ -320,11 +401,10 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setM) {
-          final dark = Theme.of(ctx).brightness == Brightness.dark;
           final cs = Theme.of(ctx).colorScheme;
           return Container(
             decoration: BoxDecoration(
-              color: dark ? const Color(0xFF0B1220) : Colors.white,
+              color: cs.surfaceContainerHigh,
               borderRadius: AppShape.sheetTop,
             ),
             padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom),
@@ -371,7 +451,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                       controller: newStoreAddressCtrl,
                       decoration: const InputDecoration(labelText: 'Адрес (необязательно)'),
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         Expanded(
@@ -519,6 +599,12 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
 
     final hasFixedWarehouse = u['warehouse'] != null;
     final maxS = _subscriptionMaxStores;
+    final isSeller = u['role'] == 'seller';
+    final canManageStores = !isSeller;
+    final canSeeTrash = !isSeller;
+    final canSeeWarehouseQty = !isSeller;
+    final stats = _warehouseStats();
+    final mobileSlice = products.skip((mobilePage - 1) * _warehouseMobilePageSize).take(_warehouseMobilePageSize).toList();
 
     return AppScaffold(
       child: SafeArea(
@@ -527,28 +613,36 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
           onRefresh: () async {
             await _loadRate();
             await _loadWarehouses();
+            await _loadCategories();
             _syncWarehouseFromUser();
             await _loadOutlets();
             await _loadProducts();
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
             children: [
-              Text(
-                'Склад — остатки товаров',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface),
-              ),
-              const SizedBox(height: 14),
-              _WarehouseCard(
+              WarehouseHero(
                 dark: dark,
                 cs: cs,
+                isSeller: isSeller,
+                warehouseName: _warehouseDisplayName(u),
+                storeCount: warehouseOutlets.length,
+                stats: stats,
+                showTrash: showTrash,
+                onArrivals: () => Navigator.of(context).pushNamed('/arrivals'),
+                onTransfers: () => Navigator.of(context).pushNamed('/transfers'),
+                onStores: () => Navigator.of(context).pushNamed('/stores'),
+              ),
+              WarehouseFiltersCard(
+                cs: cs,
+                dark: dark,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (!showTrash) ...[
+                    if (!showTrash && canManageStores) ...[
                       Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
+                        spacing: 8,
+                        runSpacing: 6,
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           Tooltip(
@@ -558,19 +652,22 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                             child: FilledButton.icon(
                               onPressed: _storeLimitReached ? null : _showConnectStoreSheet,
                               style: FilledButton.styleFrom(
-                                backgroundColor: const Color(0xFF2563EB),
+                                minimumSize: const Size(0, 32),
+                                backgroundColor: AppBrand.primaryBlue,
                                 disabledBackgroundColor: cs.surfaceContainerHighest,
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                visualDensity: VisualDensity.compact,
                               ),
-                              icon: const Icon(Icons.add_rounded, size: 20),
-                              label: const Text('Подключить магазин'),
+                              icon: const Icon(Icons.add_rounded, size: 16),
+                              label: const Text('Подключить магазин', style: TextStyle(fontSize: 13)),
                             ),
                           ),
                           if (warehouseOutlets.isNotEmpty) ...[
                             ...warehouseOutlets.map((o) {
                               return Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  borderRadius: AppShape.br,
+                                  borderRadius: BorderRadius.circular(6),
                                   color: const Color(0xFF2563EB).withValues(alpha: dark ? 0.25 : 0.12),
                                   border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.45)),
                                 ),
@@ -590,12 +687,15 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                       ),
                       const SizedBox(height: 12),
                     ],
-                    if (!hasFixedWarehouse) ...[
+                    if (!hasFixedWarehouse && !isSeller) ...[
                       DropdownButtonFormField<int>(
                         key: ValueKey<int?>(selectedWarehouseId),
                         initialValue: selectedWarehouseId,
                         isExpanded: true,
-                        decoration: const InputDecoration(isDense: true, labelText: 'Склад'),
+                        decoration: const InputDecoration(
+                          labelText: 'Склад',
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        ),
                         items: warehouses.map((w) {
                           final id = _asInt(w['id']);
                           if (id == null) return null;
@@ -612,65 +712,123 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                       ),
                       const SizedBox(height: 10),
                     ],
+                    DropdownButtonFormField<int>(
+                      key: ValueKey<int?>(selectedCategoryId),
+                      initialValue: selectedCategoryId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Категория',
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      ),
+                      items: [
+                        const DropdownMenuItem<int>(value: null, child: Text('Все категории')),
+                        ...categories.where((c) => c['parent'] == null).map((c) {
+                          final id = _asInt(c['id']);
+                          if (id == null) return null;
+                          return DropdownMenuItem<int>(value: id, child: Text((c['name'] ?? '').toString()));
+                        }).whereType<DropdownMenuItem<int>>(),
+                      ],
+                      onChanged: (v) {
+                        setState(() => selectedCategoryId = v);
+                        _loadProducts();
+                      },
+                    ),
+                    const SizedBox(height: 10),
                     TextField(
                       controller: searchCtrl,
-                      decoration: const InputDecoration(
-                        isDense: true,
-                        prefixIcon: Icon(Icons.search_rounded),
-                        hintText: 'Поиск по имени / модели / артикулу',
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                        hintText: isSeller ? 'Найти товар…' : 'Поиск по имени / модели / артикулу',
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(value: false, label: Text('Товары')),
-                              ButtonSegment(value: true, label: Text('Корзина')),
-                            ],
-                            selected: {showTrash},
-                            onSelectionChanged: (s) {
-                              setState(() => showTrash = s.first);
-                              _loadProducts();
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (!showTrash) ...[
+                    if (canSeeTrash) ...[
                       const SizedBox(height: 10),
-                      SwitchListTile(
-                        value: hideZero,
+                      WarehouseTrashTabs(
+                        showTrash: showTrash,
                         onChanged: (v) {
-                          setState(() => hideZero = v);
+                          setState(() => showTrash = v);
                           _loadProducts();
                         },
-                        title: Text('Скрывать товары с нулевым остатком', style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ],
+                    if (!showTrash) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Switch(
+                            value: hideZero,
+                            onChanged: (v) {
+                              setState(() => hideZero = v);
+                              _loadProducts();
+                            },
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Скрывать товары с нулевым остатком',
+                              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
-              if (loadingProducts && products.isEmpty) const SkeletonListBlock(rows: 8)
-else
-                _WarehouseProductsTable(
-                  dark: dark,
+              if (loadingProducts && products.isEmpty)
+                const SkeletonListBlock(rows: 6)
+              else if (products.isEmpty)
+                WarehouseFiltersCard(
                   cs: cs,
-                  products: products,
-                  warehouseOutlets: warehouseOutlets,
-                  showTrash: showTrash,
-                  usdToTjs: usdToTjs,
-                  unitLabel: _unitLabel,
-                  onRowTap: showTrash ? null : _goProductDetail,
-                  onDistribute: (!showTrash) ? _openDistribute : null,
-                  onEdit: (!showTrash) ? _openEdit : null,
-                  onDelete: _handleDelete,
-                  onRestore: showTrash ? _handleRestore : null,
-                ),
+                  dark: dark,
+                  child: Text('Нет товаров', textAlign: TextAlign.center, style: TextStyle(color: cs.onSurfaceVariant)),
+                )
+              else ...[
+                for (final record in mobileSlice)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: WarehouseMobileProductCard(
+                      record: record,
+                      cs: cs,
+                      dark: dark,
+                      warehouseOutlets: warehouseOutlets,
+                      showTrash: showTrash,
+                      isSeller: isSeller,
+                      canSeeWarehouseQty: canSeeWarehouseQty,
+                      unitLabel: _unitLabel,
+                      onTap: showTrash ? null : () {
+                        final id = _asInt(record['id']);
+                        if (id != null) _goProductDetail(id);
+                      },
+                      onDistribute: (!showTrash && !isSeller) ? () => _openDistribute(record) : null,
+                      onEdit: (!showTrash && !isSeller) ? () => _openEdit(record) : null,
+                      onDelete: () => _handleDelete(record),
+                      onRestore: showTrash ? () => _handleRestore(record) : null,
+                    ),
+                  ),
+                if (products.length > _warehouseMobilePageSize)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          onPressed: mobilePage > 1 ? () => setState(() => mobilePage--) : null,
+                          icon: const Icon(Icons.chevron_left_rounded),
+                        ),
+                        Text('$mobilePage / ${(products.length / _warehouseMobilePageSize).ceil()}'),
+                        IconButton(
+                          onPressed: mobilePage * _warehouseMobilePageSize < products.length
+                              ? () => setState(() => mobilePage++)
+                              : null,
+                          icon: const Icon(Icons.chevron_right_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ],
           ),
         ),
@@ -699,327 +857,6 @@ double? _asDouble(dynamic v) {
   if (v is int) return v.toDouble();
   if (v is num) return v.toDouble();
   return double.tryParse(v?.toString() ?? '');
-}
-
-class _WarehouseCard extends StatelessWidget {
-  const _WarehouseCard({required this.dark, required this.cs, required this.child});
-  final bool dark;
-  final ColorScheme cs;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: AppShape.br,
-        color: dark ? const Color(0xFF334155) : Colors.white,
-        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: dark ? 0.18 : 0.07),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(14),
-      child: child,
-    );
-  }
-}
-
-class _WarehouseProductsTable extends StatelessWidget {
-  const _WarehouseProductsTable({
-    required this.dark,
-    required this.cs,
-    required this.products,
-    required this.warehouseOutlets,
-    required this.showTrash,
-    required this.usdToTjs,
-    required this.unitLabel,
-    this.onRowTap,
-    this.onDistribute,
-    this.onEdit,
-    required this.onDelete,
-    this.onRestore,
-  });
-
-  final bool dark;
-  final ColorScheme cs;
-  final List<Map<String, dynamic>> products;
-  final List<Map<String, dynamic>> warehouseOutlets;
-  final bool showTrash;
-  final double usdToTjs;
-  final String Function(String?) unitLabel;
-  final void Function(int id)? onRowTap;
-  final void Function(Map<String, dynamic>)? onDistribute;
-  final void Function(Map<String, dynamic>)? onEdit;
-  final Future<void> Function(Map<String, dynamic>) onDelete;
-  final Future<void> Function(Map<String, dynamic>)? onRestore;
-
-  @override
-  Widget build(BuildContext context) {
-    if (products.isEmpty) {
-      return _WarehouseCard(
-        dark: dark,
-        cs: cs,
-        child: Text('Нет товаров', textAlign: TextAlign.center, style: TextStyle(color: cs.onSurfaceVariant)),
-      );
-    }
-
-    return _WarehouseCard(
-      dark: dark,
-      cs: cs,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: products.take(40).map((record) {
-          return _ProductRowCard(
-            record: record,
-            cs: cs,
-            dark: dark,
-            warehouseOutlets: warehouseOutlets,
-            showTrash: showTrash,
-            usdToTjs: usdToTjs,
-            unitLabel: unitLabel,
-            onTap: onRowTap != null && _asInt(record['id']) != null ? () => onRowTap!(_asInt(record['id'])!) : null,
-            onDistribute: onDistribute,
-            onEdit: onEdit,
-            onDelete: onDelete,
-            onRestore: onRestore,
-          );
-        }).toList(),
-      ),
-    );
-  }
-}
-
-class _ProductRowCard extends StatelessWidget {
-  const _ProductRowCard({
-    required this.record,
-    required this.cs,
-    required this.dark,
-    required this.warehouseOutlets,
-    required this.showTrash,
-    required this.usdToTjs,
-    required this.unitLabel,
-    this.onTap,
-    this.onDistribute,
-    this.onEdit,
-    required this.onDelete,
-    this.onRestore,
-  });
-
-  final Map<String, dynamic> record;
-  final ColorScheme cs;
-  final bool dark;
-  final List<Map<String, dynamic>> warehouseOutlets;
-  final bool showTrash;
-  final double usdToTjs;
-  final String Function(String?) unitLabel;
-  final VoidCallback? onTap;
-  final void Function(Map<String, dynamic>)? onDistribute;
-  final void Function(Map<String, dynamic>)? onEdit;
-  final Future<void> Function(Map<String, dynamic>) onDelete;
-  final Future<void> Function(Map<String, dynamic>)? onRestore;
-
-  @override
-  Widget build(BuildContext context) {
-    final summary = (record['outlets_summary'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
-    final summaryByName = <String, double>{};
-    for (final o in summary) {
-      final n = (o['outlet_name'] ?? '').toString();
-      summaryByName[n] = _asDouble(o['quantity']) ?? 0;
-    }
-    final inStores = summary.fold<double>(0, (s, o) => s + (_asDouble(o['quantity']) ?? 0));
-    final whQty = _asDouble(record['quantity']) ?? 0;
-    final total = whQty + inStores;
-    final u = (record['unit'] ?? 'pcs').toString();
-    final ul = unitLabel(u);
-
-    final tjs = _asDouble(record['total_purchase_tjs']) ?? 0;
-    final usdPur = _asDouble(record['total_purchase_usd']) ?? 0;
-    final hasPurchase = tjs > 0 || usdPur > 0;
-    final totalTjs = tjs + usdPur * usdToTjs;
-    final totalUsd = usdToTjs > 0 ? totalTjs / usdToTjs : 0;
-    final lastPrice = record['last_arrival_unit_price'] != null
-        ? (_asDouble(record['last_arrival_unit_price']) ?? 0)
-        : (_asDouble(record['cost_price']) ?? 0);
-    final lastCur = (record['last_arrival_currency'] ?? 'TJS').toString();
-    final costTjs = lastCur == 'USD' && usdToTjs > 0 ? lastPrice * usdToTjs : lastPrice;
-    final costUsd = usdToTjs > 0 ? costTjs / usdToTjs : 0;
-    final saleTjs = _asDouble(record['sale_price']) ?? 0;
-    final saleUsd = usdToTjs > 0 ? saleTjs / usdToTjs : 0;
-
-    final hasStoreQty = warehouseOutlets.any((o) => (summaryByName[(o['name'] ?? '').toString()] ?? 0) > 0);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Material(
-        color: dark ? const Color(0xFF253245) : const Color(0xFFF8FAFC),
-        borderRadius: AppShape.br,
-        child: InkWell(
-          borderRadius: AppShape.br,
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            (record['name'] ?? '—').toString(),
-                            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: cs.onSurface),
-                          ),
-                          if ((record['model'] ?? '').toString().trim().isNotEmpty)
-                            Text(
-                              record['model'].toString(),
-                              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-                            ),
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 4,
-                            children: [
-                              if ((record['brand'] ?? '').toString().isNotEmpty)
-                                _MiniTag(record['brand'].toString(), cs),
-                              if ((record['color'] ?? '').toString().isNotEmpty)
-                                _MiniTag(record['color'].toString(), cs),
-                              if ((record['memory'] ?? '').toString().isNotEmpty)
-                                _MiniTag(record['memory'].toString(), cs, blue: true),
-                              if ((record['ram'] ?? '').toString().isNotEmpty)
-                                _MiniTag(record['ram'].toString(), cs, blue: true),
-                              if ((record['size'] ?? '').toString().isNotEmpty)
-                                _MiniTag(record['size'].toString(), cs, purple: true),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    Column(
-                      children: [
-                        if (showTrash && onRestore != null)
-                          IconButton(
-                            tooltip: 'Восстановить',
-                            icon: const Icon(Icons.undo_rounded, size: 20),
-                            onPressed: () => onRestore!(record),
-                          ),
-                        if (!showTrash && onEdit != null)
-                          IconButton(
-                            tooltip: 'Изменить',
-                            icon: Icon(Icons.edit_outlined, size: 20, color: cs.onSurface),
-                            onPressed: () => onEdit!(record),
-                          ),
-                        IconButton(
-                          tooltip: showTrash ? 'Удалить навсегда' : 'Удалить',
-                          icon: const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFEF4444)),
-                          onPressed: () => onDelete(record),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text('SKU: ${record['sku'] ?? '—'}', style: TextStyle(fontSize: 12, color: cs.onSurface)),
-                if ((record['barcode'] ?? '').toString().isNotEmpty)
-                  Text(record['barcode'].toString(), style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                const SizedBox(height: 6),
-                Text('Остаток общий: $total $ul', style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface)),
-                const SizedBox(height: 6),
-                Text('Склад: $whQty $ul', style: TextStyle(fontSize: 13, color: cs.onSurface)),
-                if (warehouseOutlets.isEmpty)
-                  Text('—', style: TextStyle(color: cs.onSurfaceVariant))
-                else if (hasStoreQty)
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: warehouseOutlets.map((o) {
-                      final nm = (o['name'] ?? '').toString();
-                      final q = summaryByName[nm] ?? 0;
-                      return _MiniTag('$nm: ${q.toStringAsFixed(q % 1 == 0 ? 0 : 2)}', cs, processing: true);
-                    }).toList(),
-                  )
-                else
-                  Text('—', style: TextStyle(color: cs.onSurfaceVariant)),
-                if (!showTrash && whQty > 0 && onDistribute != null) ...[
-                  const SizedBox(height: 6),
-                  TextButton(
-                    onPressed: () => onDistribute!(record),
-                    child: const Text('Распределить (шт)'),
-                  ),
-                ],
-                const SizedBox(height: 6),
-                Text(
-                  (record['warehouse_name'] ?? '').toString().isEmpty
-                      ? 'Склад: —'
-                      : 'Склад (имя): ${record['warehouse_name']}',
-                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        'закупка: ${hasPurchase ? '${totalTjs.toStringAsFixed(2)} TJS / ≈ ${totalUsd.toStringAsFixed(2)} USD' : '—'}',
-                        style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-                      ),
-                      Text(
-                        'закупка (1 шт): ${lastPrice > 0 ? '${costTjs.toStringAsFixed(2)} TJS / ≈ ${costUsd.toStringAsFixed(2)} USD' : '—'}',
-                        style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-                      ),
-                      Text(
-                        'продажа: ${saleTjs.toStringAsFixed(2)} TJS / ≈ ${saleUsd.toStringAsFixed(2)} USD',
-                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: cs.onSurface),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MiniTag extends StatelessWidget {
-  const _MiniTag(this.text, this.cs, {this.blue = false, this.purple = false, this.processing = false});
-  final String text;
-  final ColorScheme cs;
-  final bool blue;
-  final bool purple;
-  final bool processing;
-
-  @override
-  Widget build(BuildContext context) {
-    Color bg;
-    Color fg;
-    if (processing) {
-      bg = const Color(0xFF2563EB).withValues(alpha: 0.2);
-      fg = cs.onSurface;
-    } else if (blue) {
-      bg = Colors.blue.withValues(alpha: 0.2);
-      fg = cs.onSurface;
-    } else if (purple) {
-      bg = Colors.purple.withValues(alpha: 0.2);
-      fg = cs.onSurface;
-    } else {
-      bg = cs.surfaceContainerHighest;
-      fg = cs.onSurface;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(color: bg, borderRadius: AppShape.br),
-      child: Text(text, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
-    );
-  }
 }
 
 class _DistributeBottomSheet extends StatefulWidget {
@@ -1121,12 +958,11 @@ class _DistributeBottomSheetState extends State<_DistributeBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
     final whQty = _asDouble(widget.record['quantity']) ?? 0;
     return Container(
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF0B1220) : Colors.white,
+        color: cs.surfaceContainerHigh,
         borderRadius: AppShape.sheetTop,
       ),
       padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 16 + MediaQuery.of(context).viewInsets.bottom),
@@ -1148,7 +984,7 @@ class _DistributeBottomSheetState extends State<_DistributeBottomSheet> {
               'На складе: ${whQty % 1 == 0 ? whQty.toInt() : whQty} шт',
               style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             if (widget.outlets.isEmpty)
               Text('Магазины не найдены — подключите магазины к складу.', style: TextStyle(color: cs.onSurfaceVariant))
             else
@@ -1194,9 +1030,10 @@ class _DistributeBottomSheetState extends State<_DistributeBottomSheet> {
 class _EditProductBottomSheet extends StatefulWidget {
   const _EditProductBottomSheet({
     required this.productId,
-    required this.nameCtrl,
+    required this.productName,
+    required this.quantityText,
+    required this.costTjs,
     required this.salePriceCtrl,
-    required this.qtyCtrl,
     required this.usdToTjs,
     required this.api,
     required this.onSaved,
@@ -1204,9 +1041,10 @@ class _EditProductBottomSheet extends StatefulWidget {
   });
 
   final int productId;
-  final TextEditingController nameCtrl;
+  final String productName;
+  final String quantityText;
+  final double costTjs;
   final TextEditingController salePriceCtrl;
-  final TextEditingController qtyCtrl;
   final double usdToTjs;
   final ApiClient api;
   final Future<void> Function() onSaved;
@@ -1218,22 +1056,74 @@ class _EditProductBottomSheet extends StatefulWidget {
 
 class _EditProductBottomSheetState extends State<_EditProductBottomSheet> {
   bool _loading = false;
+  String? _saleError;
+  final FocusNode _saleFocus = FocusNode();
+
+  static double? _parseSaleText(String raw) {
+    final t = raw.trim().replaceAll(',', '.');
+    if (t.isEmpty) return null;
+    if (!RegExp(r'^\d+(\.\d+)?$').hasMatch(t)) return null;
+    return double.tryParse(t);
+  }
+
+  static bool _isZeroPriceText(String t) {
+    final z = t.trim().replaceAll(',', '.');
+    return z == '0' || z == '0.0' || z == '0.00' || RegExp(r'^0+\.0+$').hasMatch(z);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.salePriceCtrl.addListener(_onSaleChanged);
+    _saleFocus.addListener(_onSaleFocus);
+    _validateSale(showEmpty: false);
+  }
+
+  @override
+  void dispose() {
+    widget.salePriceCtrl.removeListener(_onSaleChanged);
+    _saleFocus.removeListener(_onSaleFocus);
+    _saleFocus.dispose();
+    super.dispose();
+  }
+
+  void _onSaleFocus() {
+    if (!_saleFocus.hasFocus) return;
+    if (_isZeroPriceText(widget.salePriceCtrl.text)) {
+      widget.salePriceCtrl.clear();
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _onSaleChanged() {
+    _validateSale(showEmpty: false);
+  }
+
+  bool _validateSale({required bool showEmpty}) {
+    final raw = widget.salePriceCtrl.text.trim();
+    String? err;
+    if (raw.isEmpty) {
+      err = showEmpty ? 'Введите цену продажи' : null;
+    } else {
+      final sale = _parseSaleText(raw);
+      if (sale == null || sale <= 0) {
+        err = 'Введите цену продажи (только цифры)';
+      } else if (widget.costTjs > 0 && sale <= widget.costTjs) {
+        err = 'Цена продажи должна быть выше цены закупки (${widget.costTjs.toStringAsFixed(2)} TJS)';
+      }
+    }
+    if (mounted && _saleError != err) setState(() => _saleError = err);
+    return err == null;
+  }
 
   Future<void> _save() async {
-    final name = widget.nameCtrl.text.trim();
-    if (name.isEmpty) {
-      widget.onError('Введите название');
-      return;
-    }
+    if (!_validateSale(showEmpty: true)) return;
+    final sale = _parseSaleText(widget.salePriceCtrl.text) ?? 0;
     setState(() => _loading = true);
     try {
       final res = await widget.api.patch(
         'inventory/products/${widget.productId}/',
-        body: {
-          'name': name,
-          'sale_price': double.tryParse(widget.salePriceCtrl.text.replaceAll(',', '.')) ?? 0,
-          'quantity': double.tryParse(widget.qtyCtrl.text.replaceAll(',', '.')) ?? 0,
-        },
+        body: {'sale_price': sale},
       );
       if (res.statusCode < 200 || res.statusCode >= 300) {
         final err = _tryJsonMap(res.body);
@@ -1252,12 +1142,38 @@ class _EditProductBottomSheetState extends State<_EditProductBottomSheet> {
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
-    final sale = double.tryParse(widget.salePriceCtrl.text.replaceAll(',', '.')) ?? 0;
-    final usd = widget.usdToTjs > 0 ? (sale / widget.usdToTjs).toStringAsFixed(2) : '—';
+    final sale = _parseSaleText(widget.salePriceCtrl.text) ?? 0;
+    final saleUsd = widget.usdToTjs > 0 ? sale / widget.usdToTjs : null;
+    final costTjs = widget.costTjs;
+    final costUsd = widget.usdToTjs > 0 ? costTjs / widget.usdToTjs : null;
+    final profitTjs = sale - costTjs;
+    final profitUsd = widget.usdToTjs > 0 ? profitTjs / widget.usdToTjs : null;
+    final profitColor = profitTjs > 0 ? const Color(0xFF52C41A) : const Color(0xFFFF4D4F);
+
+    final fieldFill = cs.surfaceContainerHighest.withValues(alpha: dark ? 0.35 : 0.55);
+    InputDecoration fieldDecoration(String label, {String? suffix}) => InputDecoration(
+          labelText: label,
+          suffixText: suffix,
+          labelStyle: TextStyle(color: cs.onSurfaceVariant),
+          filled: true,
+          fillColor: fieldFill,
+        );
+
+    Widget readOnlyRow(String label, String value) => Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+              const SizedBox(height: 4),
+              Text(value, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: cs.onSurface)),
+            ],
+          ),
+        );
 
     return Container(
       decoration: BoxDecoration(
-        color: dark ? const Color(0xFF0B1220) : Colors.white,
+        color: cs.surfaceContainerHigh,
         borderRadius: AppShape.sheetTop,
       ),
       padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 16 + MediaQuery.of(context).viewInsets.bottom),
@@ -1266,30 +1182,38 @@ class _EditProductBottomSheetState extends State<_EditProductBottomSheet> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text('Изменить товар', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: cs.onSurface)),
-          const SizedBox(height: 14),
-          TextField(controller: widget.nameCtrl, decoration: const InputDecoration(labelText: 'Название')),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
+          readOnlyRow('Название', widget.productName.isEmpty ? '—' : widget.productName),
+          readOnlyRow(
+            'Цена закупки',
+            costTjs > 0
+                ? '${costTjs.toStringAsFixed(2)} TJS${costUsd != null ? ' / ≈ ${costUsd.toStringAsFixed(2)} USD' : ''}'
+                : '—',
+          ),
+          readOnlyRow('Остаток', widget.quantityText),
           TextField(
             controller: widget.salePriceCtrl,
+            focusNode: _saleFocus,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Цена продажи (TJS)', suffixText: 'TJS'),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d.,]'))],
+            style: TextStyle(color: cs.onSurface),
+            decoration: fieldDecoration('Цена продажи (TJS)', suffix: 'TJS').copyWith(errorText: _saleError),
           ),
           Text(
-            '≈ $usd USD (курс 1 USD = ${widget.usdToTjs.toStringAsFixed(2)} TJS)',
+            '≈ ${saleUsd != null ? saleUsd.toStringAsFixed(2) : '—'} USD (курс 1 USD = ${widget.usdToTjs.toStringAsFixed(2)} TJS)',
             style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
           ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: widget.qtyCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Остаток'),
+          const SizedBox(height: 8),
+          Text(
+            'Ваш доход: ${profitTjs.toStringAsFixed(2)} TJS${profitUsd != null ? ' / ≈ ${profitUsd.toStringAsFixed(2)} USD' : ''}',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: profitColor),
           ),
           const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
                 child: FilledButton(
-                  onPressed: _loading ? null : _save,
+                  onPressed: (_loading || _saleError != null) ? null : _save,
                   child: Text(_loading ? 'Сохранение…' : 'Сохранить'),
                 ),
               ),

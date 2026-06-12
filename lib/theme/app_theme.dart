@@ -1,6 +1,8 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'app_brand.dart';
 import 'app_shape.dart';
 
 /// Візуальна система Tojir: виразний M3, спокійна палітра, типографіка рівня продукту 2027.
@@ -8,13 +10,25 @@ ThemeData buildTojirTheme({
   required Brightness brightness,
   Color? darkSurface,
 }) {
-  const seed = Color(0xFF4F46E5);
-  final colorScheme = ColorScheme.fromSeed(
+  const seed = AppBrand.seed;
+  var colorScheme = ColorScheme.fromSeed(
     seedColor: seed,
     brightness: brightness,
-    surface: darkSurface,
+    surface: brightness == Brightness.dark ? (darkSurface ?? AppBrand.darkPage) : null,
     dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
   );
+  if (brightness == Brightness.dark) {
+    final page = darkSurface ?? AppBrand.darkPage;
+    colorScheme = colorScheme.copyWith(
+      primary: AppBrand.primaryBlue,
+      surface: page,
+      surfaceContainerLowest: page,
+      surfaceContainerLow: AppBrand.darkCard,
+      surfaceContainer: AppBrand.darkRow,
+      surfaceContainerHigh: AppBrand.darkCard,
+      surfaceContainerHighest: const Color(0xFF243047),
+    );
+  }
 
   final materialBase = ThemeData(brightness: brightness, useMaterial3: true).textTheme;
   final baseText = GoogleFonts.plusJakartaSansTextTheme(materialBase).apply(
@@ -22,12 +36,13 @@ ThemeData buildTojirTheme({
     displayColor: colorScheme.onSurface,
   );
 
-  final r = AppShape.radius;
+  final r = AppShape.radiusSm;
+  final rMd = AppShape.radius;
   final rLg = AppShape.radiusLg;
 
   final scaffoldBg = brightness == Brightness.dark
       ? (darkSurface ?? colorScheme.surface)
-      : const Color(0xFFF0F4FA);
+      : AppBrand.lightPage;
 
   return ThemeData(
     colorScheme: colorScheme,
@@ -64,17 +79,17 @@ ThemeData buildTojirTheme({
       surfaceTintColor: colorScheme.surfaceTint.withValues(alpha: 0.08),
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(r),
+        borderRadius: BorderRadius.circular(rMd),
         side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: brightness == Brightness.dark ? 0.2 : 0.35)),
       ),
       margin: EdgeInsets.zero,
-      color: brightness == Brightness.dark ? colorScheme.surfaceContainerLow : colorScheme.surface,
+      color: brightness == Brightness.dark ? AppBrand.darkCard : colorScheme.surface,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: colorScheme.surfaceContainerHighest.withValues(alpha: brightness == Brightness.dark ? 0.35 : 0.55),
       isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(r)),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(r),
@@ -92,7 +107,7 @@ ThemeData buildTojirTheme({
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         elevation: 0,
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         textStyle: const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0.1),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r)),
       ),

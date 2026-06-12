@@ -189,7 +189,7 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
         child: RefreshIndicator(
           onRefresh: _loadNotifications,
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             children: [
               Row(
                 children: [
@@ -211,7 +211,7 @@ class _NotificationsSettingsScreenState extends State<NotificationsSettingsScree
                 'Мобильные push (FCM) в этом билде отключены. Ниже — история уведомлений с сервера (как во вебе).',
                 style: TextStyle(fontSize: 13, height: 1.35, color: cs.onSurfaceVariant),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(14),

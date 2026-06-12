@@ -81,7 +81,10 @@ class SessionController extends ChangeNotifier {
     }
   }
 
-  Future<void> requestSmsCode(String digits9, {String registerAs = 'client'}) async {
+  Future<({bool isNewUser, String? debugCode})> requestSmsCode(
+    String digits9, {
+    String registerAs = 'client',
+  }) async {
     final phone = digits9.replaceAll(RegExp(r'\D'), '').trim();
     if (phone.length != 9) {
       throw ArgumentError('Введите 9 цифр после +992');
@@ -95,6 +98,15 @@ class SessionController extends ChangeNotifier {
       if (res.statusCode != 200) {
         throw Exception(_parseError(res.body, fallback: 'Не удалось отправить код'));
       }
+      final data = jsonDecode(res.body);
+      if (data is! Map<String, dynamic>) {
+        return (isNewUser: false, debugCode: null);
+      }
+      final debug = data['debug_code'];
+      return (
+        isNewUser: data['is_new_user'] == true,
+        debugCode: kDebugMode && debug != null ? debug.toString() : null,
+      );
     } on http.ClientException catch (e) {
       throw Exception(
         'Нет связи с сервером (часто на Flutter Web это CORS). '
@@ -145,7 +157,8 @@ class SessionController extends ChangeNotifier {
     }
     final res = await _api.post(
       'auth/jwt/token/',
-      body: {'username': digits, 'password': password},
+      // USERNAME_FIELD on the API User model is `phone` (not `username`).
+      body: {'phone': digits, 'password': password},
       withAuth: false,
     );
     if (res.statusCode != 200) {
@@ -167,6 +180,20 @@ class SessionController extends ChangeNotifier {
     await _storage.setUserJson(me.body);
     notifyListeners();
     unawaited(PushService.instance.syncAfterLogin(_api));
+  }
+
+  Future<void> becomeBusinessman() async {
+    final res = await _api.post('me/become-businessman/');
+    if (res.statusCode != 200) {
+      throw Exception(_parseError(res.body, fallback: 'Не удалось сменить роль'));
+    }
+    final u = jsonDecode(res.body);
+    if (u is! Map<String, dynamic>) {
+      throw Exception('Неверный ответ сервера');
+    }
+    _user = u;
+    await _storage.setUserJson(jsonEncode(u));
+    notifyListeners();
   }
 
   Future<void> logout() async {

@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 
-/// Сучасна геометрія M3 (2024–2027): м’які радіуси, єдиний стиль по всьому застосунку.
+/// Радиусы как web: --tojir-radius-sm/md/lg (10 / 14 / 18).
 abstract final class AppShape {
-  /// Кнопки, поля, дрібні картки
+  static const double radiusSm = 10;
   static const double radius = 14;
-
-  /// Великі картки, модальні панелі
-  static const double radiusLg = 20;
+  static const double radiusLg = 18;
 
   static BorderRadius get br => BorderRadius.circular(radius);
 

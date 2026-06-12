@@ -99,6 +99,72 @@ String _sliceCreated(dynamic v) {
   return s.length > 19 ? s.substring(0, 19) : s;
 }
 
+const _debtsMobilePageSize = 10;
+const _weOweGreenRemainingMax = 50;
+const _cardBg = Color(0xFF1A2438);
+const _progressGreen = Color(0xFF73D13D);
+const _progressRed = Color(0xFFFF7875);
+const _blue = Color(0xFF2563EB);
+
+String _formatDebtCreated(dynamic v) {
+  if (v == null) return '—';
+  try {
+    final dt = DateTime.parse(v.toString());
+    final d = dt.day.toString().padLeft(2, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final y = (dt.year % 100).toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '$d.$m.$y $h:$min';
+  } catch (_) {
+    return _sliceCreated(v);
+  }
+}
+
+({double total, double paid, double remaining, int percentPaid, int percentRemaining}) _debtPaymentStats(Map<String, dynamic> record) {
+  final total = (_asDouble(record['amount']) ?? 0).abs();
+  final remaining = (_asDouble(record['amount_remaining']) ?? _asDouble(record['amount']) ?? 0).abs();
+  final paid = (total - remaining).clamp(0, double.infinity).toDouble();
+  final percentPaid = total > 0 ? ((paid / total) * 100).round().clamp(0, 100) : 0;
+  final percentRemaining = total > 0 ? ((remaining / total) * 100).round().clamp(0, 100) : 0;
+  return (total: total, paid: paid, remaining: remaining, percentPaid: percentPaid, percentRemaining: percentRemaining);
+}
+
+({String text, String tone})? _dueDateCountdown(dynamic dueDate) {
+  if (dueDate == null) return null;
+  final raw = dueDate.toString();
+  final head = raw.length >= 10 ? raw.substring(0, 10) : raw;
+  DateTime? due;
+  try {
+    due = DateTime.parse(head);
+  } catch (_) {
+    return null;
+  }
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final dueDay = DateTime(due.year, due.month, due.day);
+  final daysLeft = dueDay.difference(today).inDays;
+  if (daysLeft < 0) {
+    final overdue = daysLeft.abs();
+    return (text: overdue == 1 ? 'Просрочено: 1 день' : 'Просрочено: $overdue дн.', tone: 'overdue');
+  }
+  if (daysLeft == 0) return (text: 'Срок сегодня', tone: 'today');
+  if (daysLeft == 1) return (text: 'До срока: 1 день', tone: 'soon');
+  return (text: 'До срока: $daysLeft дн.', tone: daysLeft <= 3 ? 'soon' : 'ok');
+}
+
+Color _dueCountdownColor(String tone) {
+  switch (tone) {
+    case 'overdue':
+      return _progressRed;
+    case 'soon':
+    case 'today':
+      return const Color(0xFFFFC069);
+    default:
+      return const Color(0xFF91CAFF);
+  }
+}
+
 class DebtsScreen extends StatefulWidget {
   const DebtsScreen({super.key});
 
@@ -118,6 +184,8 @@ class _DebtsScreenState extends State<DebtsScreen> {
   double? usdToTjs;
   int? deletingId;
   int? reminderLoadingId;
+  int weOweMobilePage = 1;
+  int clientOwesMobilePage = 1;
 
   @override
   void initState() {
@@ -230,7 +298,11 @@ class _DebtsScreenState extends State<DebtsScreen> {
           : (j is Map && j['results'] is List)
               ? (j['results'] as List).whereType<Map<String, dynamic>>().map(Map<String, dynamic>.from).toList()
               : <Map<String, dynamic>>[];
-      setState(() => debts = list);
+      setState(() {
+        debts = list;
+        weOweMobilePage = 1;
+        clientOwesMobilePage = 1;
+      });
     } catch (_) {
       if (mounted) setState(() => debts = const []);
     } finally {
@@ -426,17 +498,23 @@ class _DebtsScreenState extends State<DebtsScreen> {
     return 'Отправить SMS: остаток долга, магазин, причина (по тарифу — не чаще 1 раза в 72 ч)';
   }
 
-  Widget _actionsRow(Map<String, dynamic> record, {required bool clientOwes}) {
+  Widget _actionsRow(
+    Map<String, dynamic> record, {
+    required bool clientOwes,
+    bool hidePay = false,
+    bool hideSms = false,
+  }) {
     if (_isClient) return const SizedBox.shrink();
     final id = _asInt(record['id']);
     final remaining = _asDouble(record['amount_remaining']) ?? _asDouble(record['amount']) ?? 0;
+    const iconColor = Color(0xFFD9D9D9);
     const compactConstraints = BoxConstraints.tightFor(width: 36, height: 36);
     if (showTrash) {
-      return Wrap(
-        spacing: 4,
+      return Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            icon: const Icon(Icons.undo),
+            icon: const Icon(Icons.undo_rounded, color: iconColor, size: 20),
             tooltip: 'Восстановить',
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
@@ -444,7 +522,9 @@ class _DebtsScreenState extends State<DebtsScreen> {
             onPressed: () => _restore(record),
           ),
           IconButton(
-            icon: deletingId == id ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.delete_forever),
+            icon: deletingId == id
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.delete_forever_rounded, color: Color(0xFFFF4D4F), size: 20),
             tooltip: 'Удалить навсегда',
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
@@ -456,11 +536,11 @@ class _DebtsScreenState extends State<DebtsScreen> {
     }
     final phoneOk = (record['client_phone'] as String?)?.trim().isNotEmpty ?? false;
     final canRemind = phoneOk && record['debt_reminder_can_send'] != false;
-    return Wrap(
-      spacing: 0,
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
-          icon: const Icon(Icons.edit_outlined),
+          icon: const Icon(Icons.edit_outlined, color: iconColor, size: 20),
           tooltip: 'Изменить',
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,
@@ -468,26 +548,29 @@ class _DebtsScreenState extends State<DebtsScreen> {
           onPressed: () => _openEdit(record),
         ),
         IconButton(
-          icon: deletingId == id ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.delete_outline),
+          icon: deletingId == id
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.delete_outline_rounded, color: Color(0xFFFF4D4F), size: 20),
           tooltip: 'Удалить',
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,
           constraints: compactConstraints,
           onPressed: deletingId == id ? null : () => _delete(record, permanent: false),
         ),
-        IconButton(
-          icon: const Icon(Icons.payments_outlined),
-          tooltip: 'Оплата',
-          visualDensity: VisualDensity.compact,
-          padding: EdgeInsets.zero,
-          constraints: compactConstraints,
-          onPressed: remaining <= 0 ? null : () => _openPayment(record),
-        ),
-        if (clientOwes)
+        if (!hidePay)
+          IconButton(
+            icon: const Icon(Icons.paid_outlined, color: iconColor, size: 20),
+            tooltip: 'Оплата',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: compactConstraints,
+            onPressed: remaining <= 0.009 ? null : () => _openPayment(record),
+          ),
+        if (clientOwes && !hideSms)
           IconButton(
             icon: reminderLoadingId == id
-                ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.sms_outlined),
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.sms_outlined, color: iconColor, size: 20),
             tooltip: _reminderTooltip(record),
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
@@ -498,22 +581,122 @@ class _DebtsScreenState extends State<DebtsScreen> {
     );
   }
 
-  Widget _debtTile(Map<String, dynamic> r, {required bool weOwe}) {
+  Widget _debtProgressBar(Map<String, dynamic> record) {
+    final stats = _debtPaymentStats(record);
+    if (stats.total <= 0) return const SizedBox.shrink();
+    final isClosed = stats.remaining <= 0.009;
+    final isWeOwe = record['debt_type'] == 'we_owe';
+    final weOweMotivated = isWeOwe && !isClosed && stats.percentRemaining <= _weOweGreenRemainingMax;
+    final barColor = isClosed
+        ? _progressGreen
+        : isWeOwe
+            ? (weOweMotivated ? _progressGreen : _progressRed)
+            : _progressGreen;
+
+    String rightLabel;
+    if (isClosed) {
+      rightLabel = 'Закрыт';
+    } else if (weOweMotivated) {
+      rightLabel = 'Осталось ${stats.percentRemaining}% — почти закрыто';
+    } else {
+      rightLabel = 'Осталось ${stats.percentRemaining}%';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: stats.percentPaid / 100,
+              minHeight: 6,
+              backgroundColor: Colors.white.withValues(alpha: 0.08),
+              color: barColor,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Оплачено ${stats.percentPaid}%',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: weOweMotivated ? _progressGreen : Colors.white.withValues(alpha: 0.55),
+                ),
+              ),
+              Text(
+                rightLabel,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: (isClosed || weOweMotivated) ? FontWeight.w600 : FontWeight.w400,
+                  color: (isClosed || weOweMotivated) ? _progressGreen : Colors.white.withValues(alpha: 0.55),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _smsCooldownText(Map<String, dynamic> record) {
+    if (record['debt_reminder_can_send'] != false || record['debt_reminder_next_at'] == null) {
+      return const SizedBox.shrink();
+    }
+    try {
+      final next = DateTime.parse(record['debt_reminder_next_at'].toString());
+      final diff = next.difference(DateTime.now());
+      if (diff.inMilliseconds <= 0) return const SizedBox.shrink();
+      final totalMins = (diff.inMinutes + (diff.inSeconds % 60 > 0 ? 1 : 0));
+      final days = totalMins ~/ (60 * 24);
+      final hours = (totalMins % (60 * 24)) ~/ 60;
+      final mins = totalMins % 60;
+      String text;
+      if (days > 0) {
+        text = 'SMS через $days дн. $hours ч.';
+      } else if (hours > 0) {
+        text = 'SMS через $hours ч. $mins мин.';
+      } else {
+        text = 'SMS через $mins мин.';
+      }
+      return Text(text, style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55)), textAlign: TextAlign.right);
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
+  }
+
+  Widget _debtMobileCard(Map<String, dynamic> r, {required bool weOwe}) {
     final cs = Theme.of(context).colorScheme;
     final amt = _asDouble(r['amount']);
-    final rem = _asDouble(r['amount_remaining']) ?? amt;
+    final stats = _debtPaymentStats(r);
     final cur = (r['currency'] ?? 'TJS').toString();
-    final signColor = weOwe ? cs.error : cs.primary;
+    final signColor = weOwe ? const Color(0xFFFF4D4F) : const Color(0xFF52C41A);
     final sign = weOwe ? '−' : '+';
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
+    final borderColor = weOwe ? const Color(0xFFFF4D4F).withValues(alpha: 0.35) : const Color(0xFF52C41A).withValues(alpha: 0.35);
+    final canPay = !_isClient && !showTrash && stats.remaining > 0.009;
+    final showClientSms = !weOwe && !_isClient && !showTrash;
+    final dueInfo = _dueDateCountdown(r['due_date']);
+    final payLabel = stats.percentRemaining > 0 && stats.percentRemaining < 100
+        ? 'Оплатить (осталось ${stats.percentRemaining}%)'
+        : 'Оплатить';
+
+    return Material(
+      color: _cardBg,
+      borderRadius: BorderRadius.circular(10),
       child: InkWell(
         onTap: () => _openHistory(r),
-        borderRadius: AppShape.br,
-        child: Padding(
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
           padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: borderColor),
+          ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -524,78 +707,176 @@ class _DebtsScreenState extends State<DebtsScreen> {
                       children: [
                         Text(
                           (r['debtor_name'] ?? r['debtor_display'] ?? '—').toString(),
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15, height: 1.3),
                         ),
                         if (!weOwe && (r['client_phone'] as String?)?.isNotEmpty == true)
-                          Text(r['client_phone'] as String, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(r['client_phone'] as String, style: TextStyle(fontSize: 12, color: cs.onSurface.withValues(alpha: 0.55))),
+                          ),
                         if (!weOwe && r['sale_batch_id'] != null)
                           Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Chip(
-                              label: const Text('Из продажи', style: TextStyle(fontSize: 11)),
-                              visualDensity: VisualDensity.compact,
-                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              padding: EdgeInsets.zero,
-                              labelPadding: const EdgeInsets.symmetric(horizontal: 8),
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: _blue.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text('Из продажи', style: TextStyle(fontSize: 11, color: _blue, fontWeight: FontWeight.w600)),
                             ),
                           ),
                       ],
                     ),
                   ),
-                  if (!_isSeller && !_isClient)
-                    Text(
-                      (r['warehouse_name'] ?? '—').toString(),
-                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-                    ),
+                  if (!_isClient)
+                    _actionsRow(r, clientOwes: !weOwe, hidePay: !weOwe, hideSms: !weOwe),
                 ],
               ),
-              if (!weOwe && !_isSeller) ...[
-                const SizedBox(height: 4),
-                Text('Магазин: ${r['sale_outlet_name'] ?? '—'}', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-                if ((r['sold_by_display'] as String?)?.isNotEmpty ?? false)
-                  Text('Продавец: ${r['sold_by_display']}', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-              ],
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               Row(
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Сумма', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                      Text(
-                        amt != null ? '$sign${_formatMoneyRu(amt)} $cur' : '—',
-                        style: TextStyle(fontWeight: FontWeight.w600, color: signColor),
-                      ),
-                      if (amt != null) _fxLine(amt, cur, usdToTjs, cs) ?? const SizedBox.shrink(),
-                    ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Сумма', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.5))),
+                        const SizedBox(height: 2),
+                        Text(
+                          amt != null ? '$sign${_formatMoneyRu(amt)} $cur' : '—',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: signColor),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(width: 24),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Остаток', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                      Text(
-                        rem != null ? '$sign${_formatMoneyRu(rem)} $cur' : '—',
-                        style: TextStyle(fontWeight: FontWeight.w600, color: signColor),
-                      ),
-                      if (rem != null) _fxLine(rem, cur, usdToTjs, cs) ?? const SizedBox.shrink(),
-                    ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Остаток', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.5))),
+                        const SizedBox(height: 2),
+                        Text(
+                          '$sign${_formatMoneyRu(stats.remaining)}',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: signColor),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
-              Text('Срок: ${_sliceDate(r['due_date'])} · Создано: ${_sliceCreated(r['created_at'])}',
-                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-              if ((r['note'] as String?)?.isNotEmpty ?? false)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(r['note'] as String, style: TextStyle(fontSize: 12, color: cs.onSurface.withValues(alpha: 0.9))),
+              _debtProgressBar(r),
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  children: [
+                    Text(_formatDebtCreated(r['created_at']), style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55))),
+                    if (r['due_date'] != null)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Срок: ${_sliceDate(r['due_date'])}', style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55))),
+                          if (dueInfo != null)
+                            Text(dueInfo.text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _dueCountdownColor(dueInfo.tone))),
+                        ],
+                      ),
+                    if ((r['sale_outlet_name'] as String?)?.isNotEmpty ?? false)
+                      Text(r['sale_outlet_name'] as String, style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55))),
+                  ],
                 ),
-              _actionsRow(r, clientOwes: !weOwe),
+              ),
+              if (canPay || showClientSms) ...[
+                const SizedBox(height: 12),
+                if (canPay)
+                  FilledButton.icon(
+                    onPressed: () => _openPayment(r),
+                    icon: const Icon(Icons.paid_outlined, size: 18),
+                    label: Text(payLabel),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(44),
+                      backgroundColor: _blue,
+                      textStyle: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                if (showClientSms) ...[
+                  if (canPay) const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: (reminderLoadingId == _asInt(r['id']) ||
+                                (r['client_phone'] as String?)?.trim().isEmpty == true ||
+                                r['debt_reminder_can_send'] == false)
+                            ? null
+                            : () => _sendReminder(r),
+                        icon: reminderLoadingId == _asInt(r['id'])
+                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.message_outlined, size: 16),
+                        label: const Text('SMS'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 32),
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          foregroundColor: Colors.white.withValues(alpha: 0.85),
+                          side: BorderSide(color: Colors.white.withValues(alpha: 0.2)),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(child: _smsCooldownText(r)),
+                    ],
+                  ),
+                ],
+              ],
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _debtMobileList({
+    required List<Map<String, dynamic>> items,
+    required bool weOwe,
+    required int page,
+    required ValueChanged<int> onPage,
+    required String emptyMessage,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    if (loading && items.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(child: Text('Загрузка…', style: TextStyle(color: cs.onSurface.withValues(alpha: 0.55)))),
+      );
+    }
+    if (items.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: _blue.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _blue.withValues(alpha: 0.2)),
+        ),
+        child: Text(emptyMessage, style: TextStyle(fontSize: 13, color: cs.onSurface.withValues(alpha: 0.75))),
+      );
+    }
+    final start = (page - 1) * _debtsMobilePageSize;
+    final slice = items.skip(start).take(_debtsMobilePageSize).toList();
+    final totalPages = (items.length / _debtsMobilePageSize).ceil();
+    return Column(
+      children: [
+        ...slice.map((e) => Padding(padding: const EdgeInsets.only(bottom: 10), child: _debtMobileCard(e, weOwe: weOwe))),
+        if (items.length > _debtsMobilePageSize)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(onPressed: page > 1 ? () => onPage(page - 1) : null, icon: const Icon(Icons.chevron_left_rounded)),
+                Text('$page / $totalPages', style: TextStyle(fontSize: 13, color: cs.onSurface.withValues(alpha: 0.65))),
+                IconButton(onPressed: page < totalPages ? () => onPage(page + 1) : null, icon: const Icon(Icons.chevron_right_rounded)),
+              ],
+            ),
+          ),
+      ],
     );
   }
 
@@ -606,14 +887,17 @@ class _DebtsScreenState extends State<DebtsScreen> {
     Color? tint,
     Color? border,
     Widget? titleTrailing,
+    required int page,
+    required ValueChanged<int> onPage,
+    required String emptyMessage,
   }) {
     final cs = Theme.of(context).colorScheme;
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: tint,
+        color: tint ?? cs.surfaceContainerLow,
         borderRadius: AppShape.br,
-        border: Border.all(color: border ?? cs.outlineVariant),
+        border: Border.all(color: border ?? cs.outlineVariant.withValues(alpha: 0.35)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -622,18 +906,12 @@ class _DebtsScreenState extends State<DebtsScreen> {
           children: [
             Row(
               children: [
-                Expanded(child: Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))),
+                Expanded(child: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700))),
                 ?titleTrailing,
               ],
             ),
-            const SizedBox(height: 8),
-            if (loading)
-              const SkeletonListBlock(rows: 6)
-else if (items.isEmpty)
-              Text(weOwe ? 'Нет записей.' : 'Нет записей. Долги с продажи создаются автоматически; «Добавить» — вручную.',
-                  style: TextStyle(color: cs.onSurfaceVariant))
-            else
-              ...items.map((e) => _debtTile(e, weOwe: weOwe)),
+            const SizedBox(height: 10),
+            _debtMobileList(items: items, weOwe: weOwe, page: page, onPage: onPage, emptyMessage: emptyMessage),
           ],
         ),
       ),
@@ -682,12 +960,12 @@ else if (items.isEmpty)
             await _loadDebts();
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             children: [
               Text(title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
               const SizedBox(height: 8),
               Text(subtitle, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant, height: 1.35)),
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               TextField(
                 controller: searchCtrl,
                 decoration: InputDecoration(
@@ -752,21 +1030,28 @@ else if (items.isEmpty)
                   title: 'Мы должим',
                   items: weOwe,
                   weOwe: true,
-                  tint: cs.error.withValues(alpha: 0.08),
-                  border: cs.error.withValues(alpha: 0.35),
+                  tint: cs.error.withValues(alpha: 0.06),
+                  border: const Color(0xFFFF4D4F).withValues(alpha: 0.35),
+                  page: weOweMobilePage,
+                  onPage: (p) => setState(() => weOweMobilePage = p),
+                  emptyMessage: 'Нет записей «Мы должим».',
                 ),
               _sectionCard(
                 title: _isClient ? 'Долги' : 'Клиент должин',
                 items: clientOwes,
                 weOwe: false,
-                tint: cs.primary.withValues(alpha: 0.08),
-                border: cs.primary.withValues(alpha: 0.35),
+                tint: const Color(0xFF52C41A).withValues(alpha: 0.06),
+                border: const Color(0xFF52C41A).withValues(alpha: 0.35),
+                page: clientOwesMobilePage,
+                onPage: (p) => setState(() => clientOwesMobilePage = p),
+                emptyMessage: 'Нет записей. Долги с продажи (насия/частично) создаются автоматически; «Добавить» — вручную.',
                 titleTrailing: (!showTrash && !_isClient)
                     ? FilledButton.icon(
                         onPressed: outlets.isEmpty ? null : _openAdd,
                         icon: const Icon(Icons.add, size: 18),
                         label: const Text('Добавить'),
                         style: FilledButton.styleFrom(
+                          backgroundColor: _blue,
                           visualDensity: VisualDensity.compact,
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                           textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
@@ -1430,7 +1715,10 @@ class _PaymentSheetState extends State<_PaymentSheet> {
             : _firstApiError(data);
         throw Exception(msg);
       }
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Оплата записана')));
+      final fullyPaid = amt >= _max - 0.009;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(fullyPaid ? 'Оплата записана. Долг перемещён в корзину' : 'Оплата записана')),
+      );
       widget.onSaved();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));

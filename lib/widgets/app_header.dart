@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
-import '../theme/app_shape.dart';
+import '../theme/app_brand.dart';
 import '../theme/theme_controller.dart';
 import '../utils/permissions.dart';
+import 'tojir_logo.dart';
 
 class AppHeader extends StatelessWidget {
   const AppHeader({super.key, this.onMenuTap});
@@ -20,6 +21,36 @@ class AppHeader extends StatelessWidget {
     return n.toStringAsFixed(2);
   }
 
+  bool _subscriptionLocked(Map<String, dynamic>? user) {
+    if (user == null) return false;
+    final role = user['role'] as String?;
+    if (role == 'businessman' || role == 'seller') {
+      return user['subscription_is_expired'] == true;
+    }
+    if (role == 'moderator' && user['moderator_scope'] == 'business') {
+      return user['subscription_is_expired'] == true;
+    }
+    return false;
+  }
+
+  bool _subscriptionWarn(Map<String, dynamic>? user) {
+    if (user == null) return false;
+    final role = user['role'] as String?;
+    if (role == 'businessman' || role == 'seller') {
+      return user['subscription_warn'] == true;
+    }
+    if (role == 'moderator' && user['moderator_scope'] == 'business') {
+      return user['subscription_warn'] == true;
+    }
+    return false;
+  }
+
+  int? _subscriptionDaysLeft(Map<String, dynamic>? user) {
+    final v = user?['subscription_days_left'];
+    if (v is num) return v.toInt();
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -27,111 +58,89 @@ class AppHeader extends StatelessWidget {
     final session = context.watch<SessionController>();
     final user = session.user;
     final bal = _balanceText(user);
+    final subLocked = _subscriptionLocked(user);
+    final subWarn = !subLocked && _subscriptionWarn(user);
+    final daysLeft = _subscriptionDaysLeft(user);
 
-    const extraTop = 25.0;
     final topInset = MediaQuery.of(context).padding.top;
+    final pageBg = Theme.of(context).scaffoldBackgroundColor;
+    final iconColor = dark ? AppBrand.textMutedDark : cs.onSurfaceVariant;
 
     return Container(
-      padding: EdgeInsets.fromLTRB(12, topInset + extraTop, 14, 0),
+      padding: EdgeInsets.fromLTRB(16, topInset + 4, 16, 0),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: dark
-              ? [cs.surface.withValues(alpha: 0.001), cs.surfaceContainer.withValues(alpha: 0.25)]
-              : [Theme.of(context).scaffoldBackgroundColor, Theme.of(context).scaffoldBackgroundColor],
-        ),
+        color: pageBg,
         border: Border(
-          bottom: BorderSide(
-            color: cs.outlineVariant.withValues(alpha: dark ? 0.35 : 0.5),
-          ),
+          bottom: BorderSide(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
         ),
       ),
       child: SizedBox(
         height: 56,
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              children: [
-                _HeaderIcon(
-                  tooltip: 'Меню',
-                  icon: Icons.menu_rounded,
-                  onTap: onMenuTap ?? () {},
-                ),
-                const SizedBox(width: 10),
-                Image.asset(
-                  'assets/images/tojir_logo.png',
-                  height: 34,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => Text(
-                    'Tojir',
+            Flexible(fit: FlexFit.loose, child: TojirLogo(height: 28, dark: dark)),
+            const SizedBox(width: 6),
+            _HeaderIconButton(
+              icon: Icons.menu_rounded,
+              tooltip: 'Меню',
+              color: iconColor,
+              onTap: onMenuTap ?? () {},
+            ),
+            const Spacer(),
+            if (subLocked)
+              _SubscriptionPill(
+                label: 'Подписка истекла',
+                locked: true,
+                onTap: () => Navigator.of(context).pushNamed('/tariffs'),
+              )
+            else if (subWarn)
+              _SubscriptionPill(
+                label: 'Осталось ${(daysLeft ?? 0).clamp(0, 999)} дн.',
+                locked: false,
+                onTap: () => Navigator.of(context).pushNamed('/tariffs'),
+              ),
+            _HeaderIconButton(
+              icon: Icons.lightbulb_outline_rounded,
+              tooltip: dark ? 'Светлая тема' : 'Тёмная тема',
+              color: iconColor,
+              onTap: () => context.read<ThemeController>().toggle(),
+            ),
+            _HeaderIconButton(
+              icon: Icons.notifications_none_rounded,
+              tooltip: 'Уведомления',
+              color: iconColor,
+              onTap: () {
+                if (user != null &&
+                    (user['role'] as String?) == 'businessman' &&
+                    !businessmanHasWarehouse(user)) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Сначала укажите склад в профиле.')),
+                  );
+                  return;
+                }
+                Navigator.of(context).pushNamed('/settings/notifications');
+              },
+            ),
+            const SizedBox(width: 4),
+            Flexible(
+              child: InkWell(
+                onTap: () => Navigator.of(context).pushNamed('/profile'),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+                  child: Text(
+                    '$bal TJS',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
                     style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 18,
-                      letterSpacing: 0.2,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                       color: cs.onSurface,
                     ),
                   ),
                 ),
-              ],
-            ),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                  decoration: BoxDecoration(
-                    borderRadius: AppShape.br,
-                    gradient: LinearGradient(
-                      colors: [
-                        cs.primaryContainer.withValues(alpha: dark ? 0.45 : 0.85),
-                        cs.tertiaryContainer.withValues(alpha: dark ? 0.25 : 0.5),
-                      ],
-                    ),
-                    border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: cs.primary.withValues(alpha: dark ? 0.12 : 0.08),
-                        blurRadius: 12,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Text(
-                    '$bal TJS',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 13,
-                      letterSpacing: 0.2,
-                      color: cs.onPrimaryContainer,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                _HeaderIcon(
-                  tooltip: 'Уведомления',
-                  icon: Icons.notifications_none_rounded,
-                  onTap: () {
-                    final u = context.read<SessionController>().user;
-                    if (u != null &&
-                        (u['role'] as String?) == 'businessman' &&
-                        !businessmanHasWarehouse(u)) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Сначала укажите склад в профиле.')),
-                      );
-                      return;
-                    }
-                    Navigator.of(context).pushNamed('/settings/notifications');
-                  },
-                ),
-                const SizedBox(width: 8),
-                _HeaderIcon(
-                  tooltip: dark ? 'Светлая тема' : 'Тёмная тема',
-                  icon: dark ? Icons.wb_sunny_outlined : Icons.dark_mode_outlined,
-                  onTap: () => context.read<ThemeController>().toggle(),
-                ),
-                const SizedBox(width: 4),
-              ],
+              ),
             ),
           ],
         ),
@@ -140,29 +149,34 @@ class AppHeader extends StatelessWidget {
   }
 }
 
-class _HeaderIcon extends StatelessWidget {
-  const _HeaderIcon({required this.tooltip, required this.icon, required this.onTap});
+class _SubscriptionPill extends StatelessWidget {
+  const _SubscriptionPill({required this.label, required this.locked, required this.onTap});
 
-  final String tooltip;
-  final IconData icon;
+  final String label;
+  final bool locked;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Tooltip(
-      message: tooltip,
+    final fg = locked ? const Color(0xFFFB7185) : const Color(0xFFFBBF24);
+    final bg = locked ? const Color(0xFFFB7185).withValues(alpha: 0.12) : const Color(0xFFFBBF24).withValues(alpha: 0.12);
+    return Padding(
+      padding: const EdgeInsets.only(right: 4),
       child: Material(
-        color: cs.surfaceContainerHighest.withValues(alpha: dark ? 0.4 : 0.65),
-        borderRadius: AppShape.br,
+        color: Colors.transparent,
         child: InkWell(
-          borderRadius: AppShape.br,
           onTap: onTap,
-          child: SizedBox(
-            width: 40,
-            height: 40,
-            child: Icon(icon, size: 20, color: cs.onSurfaceVariant),
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 120),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg),
+            ),
           ),
         ),
       ),
@@ -170,3 +184,32 @@ class _HeaderIcon extends StatelessWidget {
   }
 }
 
+class _HeaderIconButton extends StatelessWidget {
+  const _HeaderIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(icon, size: 20, color: color),
+        ),
+      ),
+    );
+  }
+}

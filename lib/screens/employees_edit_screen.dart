@@ -159,6 +159,32 @@ class _EmployeesEditScreenState extends State<EmployeesEditScreen> {
     }
   }
 
+  Widget _sectionCard(String title, IconData icon, List<Widget> children) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A2438),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: Colors.white.withValues(alpha: 0.65)),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...children,
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -175,81 +201,87 @@ class _EmployeesEditScreenState extends State<EmployeesEditScreen> {
         top: false,
         child: fetchLoading
             ? const SingleChildScrollView(child: SkeletonListBlock(rows: 8))
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+            : Stack(
                 children: [
-                  Text('Изменить сотрудника',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Изменение имени, фамилии, доступа в магазины и прав по действиям. Телефон не редактируется.',
-                    style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant, height: 1.35),
-                  ),
-                  const SizedBox(height: 12),
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          TextField(
-                            controller: phoneCtrl,
-                            decoration: const InputDecoration(labelText: 'Телефон', border: OutlineInputBorder()),
-                            enabled: false,
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(controller: firstNameCtrl, decoration: const InputDecoration(labelText: 'Имя', border: OutlineInputBorder())),
-                          const SizedBox(height: 12),
-                          TextField(controller: lastNameCtrl, decoration: const InputDecoration(labelText: 'Фамилия', border: OutlineInputBorder())),
-                          const SizedBox(height: 12),
-                          Text('Доступ в магазины', style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface)),
-                          const SizedBox(height: 6),
-                          if (outlets.isEmpty)
-                            Text('Магазины не найдены', style: TextStyle(color: cs.onSurfaceVariant))
-                          else
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                for (final o in outlets)
-                                  if (_asInt(o['id']) != null)
-                                    FilterChip(
-                                      label: Text((o['name'] ?? 'Магазин ${o['id']}').toString()),
-                                      selected: storeIds.contains(_asInt(o['id'])!),
-                                      onSelected: (v) {
-                                        final id = _asInt(o['id'])!;
-                                        setState(() {
-                                          if (v) {
-                                            storeIds.add(id);
-                                          } else {
-                                            storeIds.remove(id);
-                                          }
-                                        });
-                                      },
-                                      visualDensity: VisualDensity.compact,
-                                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                    ),
-                              ],
-                            ),
-                          const SizedBox(height: 16),
-                          EmployeePermsEditor(
-                            value: perms,
-                            onChanged: (next) => setState(() => perms = next),
-                          ),
-                          const SizedBox(height: 12),
+                  ListView(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 88),
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                        label: const Text('Назад'),
+                        style: TextButton.styleFrom(
+                          alignment: Alignment.centerLeft,
+                          foregroundColor: Colors.white.withValues(alpha: 0.75),
+                          padding: EdgeInsets.zero,
+                        ),
+                      ),
+                      Text('Изменить сотрудника', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
+                      const SizedBox(height: 12),
+                      _sectionCard('Контакты', Icons.person_outline, [
+                        TextField(
+                          controller: phoneCtrl,
+                          decoration: const InputDecoration(labelText: 'Телефон', border: OutlineInputBorder()),
+                          enabled: false,
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(controller: firstNameCtrl, decoration: const InputDecoration(labelText: 'Имя', border: OutlineInputBorder())),
+                        const SizedBox(height: 12),
+                        TextField(controller: lastNameCtrl, decoration: const InputDecoration(labelText: 'Фамилия', border: OutlineInputBorder())),
+                      ]),
+                      _sectionCard('Магазины', Icons.storefront_outlined, [
+                        if (outlets.isEmpty)
+                          Text('Магазины не найдены', style: TextStyle(color: cs.onSurfaceVariant))
+                        else
                           Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
+                            spacing: 8,
+                            runSpacing: 8,
                             children: [
-                              FilledButton(onPressed: saving ? null : _save, child: const Text('Сохранить')),
-                              TextButton(onPressed: saving ? null : () => Navigator.of(context).pop(), child: const Text('Отмена')),
-                              OutlinedButton(
-                                onPressed: () => Navigator.of(context).pushNamed('/employees/${widget.id}'),
-                                child: const Text('Просмотр'),
-                              ),
+                              for (final o in outlets)
+                                if (_asInt(o['id']) != null)
+                                  FilterChip(
+                                    label: Text((o['name'] ?? 'Магазин ${o['id']}').toString()),
+                                    selected: storeIds.contains(_asInt(o['id'])!),
+                                    onSelected: (v) {
+                                      final id = _asInt(o['id'])!;
+                                      setState(() {
+                                        if (v) {
+                                          storeIds.add(id);
+                                        } else {
+                                          storeIds.remove(id);
+                                        }
+                                      });
+                                    },
+                                    visualDensity: VisualDensity.compact,
+                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
                             ],
                           ),
-                        ],
+                      ]),
+                      _sectionCard('Права', Icons.security_outlined, [
+                        EmployeePermsEditor(
+                          value: perms,
+                          onChanged: (next) => setState(() => perms = next),
+                        ),
+                      ]),
+                    ],
+                  ),
+                  Positioned(
+                    left: 12,
+                    right: 12,
+                    bottom: 12,
+                    child: SafeArea(
+                      top: false,
+                      child: FilledButton(
+                        onPressed: saving ? null : _save,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          minimumSize: const Size(double.infinity, 48),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: saving
+                            ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Text('Сохранить'),
                       ),
                     ),
                   ),

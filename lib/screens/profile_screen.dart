@@ -367,7 +367,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             await _loadClientDebtsIfNeeded();
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             children: [
               Text('Профиль', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
               const SizedBox(height: 12),
@@ -494,6 +494,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      const Text('Настройки', style: TextStyle(fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 10),
+                      FilledButton.tonalIcon(
+                        onPressed: () => Navigator.of(context).pushNamed('/offline-queue'),
+                        icon: const Icon(Icons.cloud_sync_outlined, size: 18),
+                        label: const Text('Офлайн-очередь'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.of(context).pushNamed('/support'),
+                        icon: const Icon(Icons.support_agent_outlined, size: 18),
+                        label: const Text('Поддержка'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => Navigator.of(context).pushNamed('/privacy'),
+                        icon: const Icon(Icons.policy_outlined, size: 18),
+                        label: const Text('Политика конфиденциальности'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
                       const Text('История баланса', style: TextStyle(fontWeight: FontWeight.w800)),
                       const SizedBox(height: 10),
                       if (historyLoading) const SkeletonListBlock(rows: 6)
@@ -599,8 +629,13 @@ else if (clientDebts.isEmpty)
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text('Реферальная программа', style: TextStyle(fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            const Expanded(child: Text('Реферальная программа', style: TextStyle(fontWeight: FontWeight.w800))),
+                            TextButton(onPressed: () => Navigator.of(context).pushNamed('/referral'), child: const Text('Подробнее →')),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
                         Text('Реферальный код: ${referralCode.isEmpty ? '—' : referralCode}', style: const TextStyle(fontWeight: FontWeight.w700)),
                         const SizedBox(height: 4),
                         Text('Приглашённых: $referralCount', style: TextStyle(color: cs.onSurfaceVariant)),

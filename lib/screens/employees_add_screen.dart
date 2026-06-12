@@ -213,15 +213,56 @@ class _EmployeesAddScreenState extends State<EmployeesAddScreen> {
     }
   }
 
+  Widget _sectionCard(String title, IconData icon, List<Widget> children) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A2438),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: Colors.white.withValues(alpha: 0.65)),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...children,
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final canAdd = _canAdd;
 
     if (!canAdd) {
-      return const AppScaffold(
+      return AppScaffold(
         showBottomNav: false,
-        child: SafeArea(top: false, child: Center(child: Text('Укажите склад в профиле или доступ только у бизнесмена.'))),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('Добавить сотрудника', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 12),
+                Text('Укажите склад в профиле.', style: TextStyle(color: cs.onSurfaceVariant)),
+                const SizedBox(height: 16),
+                OutlinedButton(onPressed: () => Navigator.of(context).pop(), child: const Text('К списку')),
+              ],
+            ),
+          ),
+        ),
       );
     }
 
@@ -229,22 +270,40 @@ class _EmployeesAddScreenState extends State<EmployeesAddScreen> {
       showBottomNav: false,
       child: SafeArea(
         top: false,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+        child: Stack(
           children: [
-            Text('Добавить сотрудника', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
-            const SizedBox(height: 8),
-            Text(
-              'Номер сотрудника — 9 цифр после +992 (код из SMS придёт на этот номер). Затем имя, фамилия, магазины и 6-значный код.',
-              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant, height: 1.35),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+            ListView(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
+              children: [
+                TextButton.icon(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                  label: const Text('Назад'),
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    foregroundColor: Colors.white.withValues(alpha: 0.75),
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+                Text('Новый сотрудник', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
+                const SizedBox(height: 12),
+                Row(
                   children: [
+                    _stepDot(1, codeSent ? false : true),
+                    Expanded(child: Container(height: 2, color: codeSent ? const Color(0xFF2563EB) : Colors.white24)),
+                    _stepDot(2, codeSent),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Данные', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                    Text('SMS', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _sectionCard('Контакты', Icons.person_outline, [
                     TextField(
                       controller: phoneCtrl,
                       decoration: const InputDecoration(
@@ -261,18 +320,17 @@ class _EmployeesAddScreenState extends State<EmployeesAddScreen> {
                         }
                       },
                     ),
-                    const SizedBox(height: 12),
-                    TextField(controller: firstNameCtrl, decoration: const InputDecoration(labelText: 'Имя', border: OutlineInputBorder())),
-                    const SizedBox(height: 12),
-                    TextField(controller: lastNameCtrl, decoration: const InputDecoration(labelText: 'Фамилия', border: OutlineInputBorder())),
-                    const SizedBox(height: 12),
-                    Text('Доступ в магазины', style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface)),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Выберите, к каким магазинам склада будет доступ у продавца.',
-                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
-                    ),
-                    const SizedBox(height: 8),
+                  const SizedBox(height: 12),
+                  TextField(controller: firstNameCtrl, decoration: const InputDecoration(labelText: 'Имя', border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: lastNameCtrl, decoration: const InputDecoration(labelText: 'Фамилия', border: OutlineInputBorder())),
+                ]),
+                _sectionCard('Магазины', Icons.storefront_outlined, [
+                  Text(
+                    'Выберите, к каким магазинам склада будет доступ у продавца.',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
+                  ),
+                  const SizedBox(height: 8),
                     if (outlets.isEmpty)
                       Text('Магазины не найдены', style: TextStyle(color: cs.onSurfaceVariant))
                     else
@@ -301,46 +359,74 @@ class _EmployeesAddScreenState extends State<EmployeesAddScreen> {
                               ),
                         ],
                       ),
-                    const SizedBox(height: 16),
-                    EmployeePermsEditor(
-                      value: perms,
-                      onChanged: (next) => setState(() => perms = next),
+                ]),
+                _sectionCard('Права', Icons.security_outlined, [
+                  EmployeePermsEditor(
+                    value: perms,
+                    onChanged: (next) => setState(() => perms = next),
+                  ),
+                ]),
+                if (codeSent)
+                  _sectionCard('SMS-подтверждение', Icons.sms_outlined, [
+                    Text('Введите 6-значный код из SMS', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: codeCtrl,
+                      decoration: const InputDecoration(labelText: 'Код', hintText: '000000', border: OutlineInputBorder()),
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 22, letterSpacing: 6),
+                      onChanged: (v) {
+                        final d = _digits(v);
+                        if (d != v) {
+                          codeCtrl.value = TextEditingValue(text: d, selection: TextSelection.collapsed(offset: d.length));
+                        }
+                      },
                     ),
-                    const SizedBox(height: 8),
-                    if (codeSent) ...[
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: codeCtrl,
-                        decoration: const InputDecoration(labelText: 'SMS-код', hintText: '000000', border: OutlineInputBorder()),
-                        keyboardType: TextInputType.number,
-                        maxLength: 6,
-                        onChanged: (v) {
-                          final d = _digits(v);
-                          if (d != v) {
-                            codeCtrl.value = TextEditingValue(text: d, selection: TextSelection.collapsed(offset: d.length));
-                          }
-                        },
+                  ]),
+              ],
+            ),
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 12,
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!codeSent)
+                      FilledButton(
+                        onPressed: loading ? null : _sendCode,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          minimumSize: const Size(double.infinity, 48),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: loading
+                            ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Text('Отправить код'),
+                      )
+                    else ...[
+                      FilledButton(
+                        onPressed: loading ? null : _confirmAdd,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          minimumSize: const Size(double.infinity, 48),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: loading
+                            ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Text('Сохранить'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: loading ? null : _sendCode,
+                        style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 44)),
+                        child: const Text('Отправить код заново'),
                       ),
                     ],
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        OutlinedButton(
-                          onPressed: loading ? null : _sendCode,
-                          child: Text(codeSent ? 'Отправить код заново' : 'Отправить код'),
-                        ),
-                        FilledButton(
-                          onPressed: (!codeSent || loading) ? null : _confirmAdd,
-                          child: const Text('Подтвердить'),
-                        ),
-                        TextButton(
-                          onPressed: loading ? null : () => Navigator.of(context).pop(),
-                          child: const Text('Отмена'),
-                        ),
-                      ],
-                    ),
                   ],
                 ),
               ),
@@ -348,6 +434,19 @@ class _EmployeesAddScreenState extends State<EmployeesAddScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _stepDot(int n, bool active) {
+    return Container(
+      width: 24,
+      height: 24,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: active ? const Color(0xFF2563EB) : Colors.white.withValues(alpha: 0.1),
+        shape: BoxShape.circle,
+      ),
+      child: Text('$n', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: active ? Colors.white : Colors.white54)),
     );
   }
 }

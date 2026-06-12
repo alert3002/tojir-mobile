@@ -1,9 +1,12 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'app_keys.dart';
+import 'config/app_config.dart';
 import 'auth/session_controller.dart';
 import 'screens/arrivals_screen.dart';
+import 'screens/brands_screen.dart';
 import 'screens/clients_screen.dart';
 import 'screens/debts_screen.dart';
 import 'screens/employees_add_screen.dart';
@@ -15,15 +18,23 @@ import 'screens/expenses_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/moderators_add_screen.dart';
+import 'screens/moderators_screen.dart';
+import 'screens/offline_queue_screen.dart';
+import 'screens/platform_dashboard_screen.dart';
+import 'screens/platform_users_screen.dart';
+import 'screens/privacy_policy_screen.dart';
+import 'screens/product_details_screen.dart';
 import 'screens/notifications_settings_screen.dart';
-import 'screens/placeholder_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/referral_screen.dart';
+import 'screens/support_screen.dart';
+import 'screens/reports_screen.dart';
 import 'screens/returns_screen.dart';
 import 'screens/sales_screen.dart';
 import 'screens/stores_screen.dart';
 import 'screens/tariffs_screen.dart';
 import 'screens/transfers_screen.dart';
-import 'screens/warehouse_product_placeholder_screen.dart';
 import 'screens/warehouse_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_storage.dart';
@@ -41,6 +52,9 @@ class TojirApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (kDebugMode) {
+      debugPrint('Tojir API: ${AppConfig.apiBase}');
+    }
     final storage = AuthStorage();
     final api = ApiClient(storage);
     final session = SessionController(storage, api);
@@ -64,7 +78,7 @@ class TojirApp extends StatelessWidget {
             if (id != null) {
               return MaterialPageRoute<void>(
                 settings: settings,
-                builder: (_) => _guarded('warehouse', WarehouseProductPlaceholderScreen(productId: id)),
+                builder: (_) => _guarded('warehouse', ProductDetailsScreen(productId: id)),
               );
             }
           }
@@ -103,9 +117,17 @@ class TojirApp extends StatelessWidget {
           '/employees/add': (_) => _guarded('employees', const EmployeesAddScreen()),
           '/tariffs': (_) => _guarded('tariffs', const TariffsScreen()),
           '/course': (_) => _guarded('course', const ExchangeRateScreen()),
-          '/reports': (_) => _guarded('reports', const PlaceholderScreen(title: 'Отчёт')),
+          '/reports': (_) => _guarded('reports', const ReportsScreen()),
           '/history': (_) => _guarded('history', const HistoryScreen()),
-          '/referral': (_) => _guarded('referral', const PlaceholderScreen(title: 'Реферальная программа')),
+          '/referral': (_) => _guarded('referral', const ReferralScreen()),
+          '/brands': (_) => _guarded('warehouse', const BrandsScreen()),
+          '/offline-queue': (_) => const OfflineQueueScreen(),
+          '/moderators': (_) => _guarded('employees', const ModeratorsScreen()),
+          '/moderators/add': (_) => _guarded('employees', const ModeratorsAddScreen()),
+          '/platform': (_) => const PlatformDashboardScreen(),
+          '/platform/users': (_) => const PlatformUsersScreen(),
+          '/support': (_) => const SupportScreen(),
+          '/privacy': (_) => const PrivacyPolicyScreen(),
           '/profile': (_) => _guarded('profile', const ProfileScreen()),
           '/settings/notifications': (_) => _guarded('notifications', const NotificationsSettingsScreen()),
         },

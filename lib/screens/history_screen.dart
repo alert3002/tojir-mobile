@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,12 +5,13 @@ import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
-import '../utils/date_range_presets.dart';
-import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
 import '../widgets/app_scaffold.dart';
 import '../widgets/skeleton_loading.dart';
-import '../widgets/quick_date_range_chips.dart';
+
+const _mobilePageSize = 20;
+const _cardBg = Color(0xFF1A2438);
+const _blue = Color(0xFF2563EB);
 
 const _kindFilterOptions = <MapEntry<String, String>>[
   MapEntry('sale', 'Продажа'),
@@ -22,7 +22,7 @@ const _kindFilterOptions = <MapEntry<String, String>>[
   MapEntry('debt_new', 'Долг клиента'),
 ];
 
-const _kindColors = <String, Color>{
+const _kindTagColors = <String, Color>{
   'sale': Color(0xFF22C55E),
   'return': Color(0xFFF97316),
   'transfer': Color(0xFF06B6D4),
@@ -42,7 +42,7 @@ String _formatMoneyRu(double n) {
   final abs = neg ? -n : n;
   final s = abs.toStringAsFixed(2);
   final dot = s.indexOf('.');
-  var intPart = s.substring(0, dot);
+  final intPart = s.substring(0, dot);
   final dec = s.substring(dot);
   final buf = StringBuffer();
   for (var i = 0; i < intPart.length; i++) {
@@ -52,18 +52,31 @@ String _formatMoneyRu(double n) {
   return '${neg ? '−' : ''}${buf.toString()}$dec';
 }
 
-String _formatAt(dynamic v) {
+String _formatAtShort(dynamic v) {
   if (v == null) return '—';
   final s = v.toString().replaceFirst('T', ' ');
-  if (s.length > 19) return s.substring(0, 19);
-  if (s.length > 16) return s.substring(0, 16);
-  return s;
+  final date = s.length >= 10 ? s.substring(0, 10) : s;
+  final time = s.length >= 16 ? s.substring(11, 16) : '';
+  return time.isNotEmpty ? '$date · $time' : date;
 }
+
+String _fmtYmd(DateTime d) =>
+    '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
 int? _asInt(dynamic v) {
   if (v is int) return v;
   if (v is num) return v.toInt();
   return int.tryParse(v?.toString() ?? '');
+}
+
+String _formatIntRu(int n) {
+  final s = n.toString();
+  final buf = StringBuffer();
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) buf.write('\u00A0');
+    buf.write(s[i]);
+  }
+  return buf.toString();
 }
 
 class HistoryScreen extends StatefulWidget {
@@ -77,12 +90,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> rows = const [];
   int total = 0;
   bool loading = false;
+  bool exporting = false;
+  bool filtersOpen = false;
 
   int page = 1;
-  int pageSize = 40;
 
   DateTimeRange? dateRange;
-  String? datePresetKey;
   String? kindFilter;
   int? outletFilter;
   final TextEditingController searchCtrl = TextEditingController();
@@ -91,11 +104,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   List<Map<String, dynamic>> outletOptions = const [];
   double? usdToTjs;
 
-  Timer? _searchDebounce;
-
   Map<String, dynamic>? get _user => context.read<SessionController>().user;
-
-  bool get _isSeller => (_user?['role'] as String?) == 'seller';
 
   bool get _showOutletFilter {
     final u = _user;
@@ -103,10 +112,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return (u['role'] as String?) == 'businessman' && u['warehouse'] != null;
   }
 
+  int get _activeFilterCount {
+    var n = 0;
+    if (search.trim().isNotEmpty) n++;
+    if (kindFilter != null && kindFilter!.isNotEmpty) n++;
+    if (outletFilter != null) n++;
+    if (dateRange != null) n++;
+    return n;
+  }
+
+  int get _totalPages {
+    if (total <= 0) return 1;
+    return (total + _mobilePageSize - 1) ~/ _mobilePageSize;
+  }
+
   @override
   void initState() {
     super.initState();
-    searchCtrl.addListener(_onSearchText);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadRate();
       if (_showOutletFilter) await _loadOutletOptions();
@@ -114,24 +136,37 @@ class _HistoryScreenState extends State<HistoryScreen> {
     });
   }
 
-  void _onSearchText() {
-    final v = searchCtrl.text;
-    if (v == search) return;
-    search = v;
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
-      if (mounted) {
-        setState(() => page = 1);
-        _loadFeed();
-      }
-    });
-  }
-
   @override
   void dispose() {
-    _searchDebounce?.cancel();
     searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _snack(String msg, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), backgroundColor: error ? Theme.of(context).colorScheme.error : null),
+    );
+  }
+
+  void _applySearch([String? v]) {
+    setState(() {
+      search = (v ?? searchCtrl.text).trim();
+      page = 1;
+    });
+    _loadFeed();
+  }
+
+  void _clearFilters() {
+    setState(() {
+      search = '';
+      searchCtrl.clear();
+      kindFilter = null;
+      outletFilter = null;
+      dateRange = null;
+      page = 1;
+    });
+    _loadFeed();
   }
 
   Future<void> _loadRate() async {
@@ -178,15 +213,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
     try {
       final qp = <String, String>{
         'page': page.toString(),
-        'page_size': pageSize.toString(),
+        'page_size': _mobilePageSize.toString(),
       };
       if (dateRange != null) {
-        final a = dateRange!.start;
-        final b = dateRange!.end;
-        qp['date_from'] =
-            '${a.year.toString().padLeft(4, '0')}-${a.month.toString().padLeft(2, '0')}-${a.day.toString().padLeft(2, '0')}';
-        qp['date_to'] =
-            '${b.year.toString().padLeft(4, '0')}-${b.month.toString().padLeft(2, '0')}-${b.day.toString().padLeft(2, '0')}';
+        qp['date_from'] = _fmtYmd(dateRange!.start);
+        qp['date_to'] = _fmtYmd(dateRange!.end);
       }
       if (search.trim().isNotEmpty) qp['search'] = search.trim();
       if (kindFilter != null && kindFilter!.isNotEmpty) qp['kind'] = kindFilter!;
@@ -197,8 +228,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       if (!mounted) return;
       if (res.statusCode != 200) {
         final body = res.body.isEmpty ? <String, dynamic>{} : _tryJsonMap(res.body);
-        final msg = body['detail']?.toString() ?? 'Ошибка';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+        _snack(body['detail']?.toString() ?? 'Ошибка', error: true);
         setState(() {
           rows = const [];
           total = 0;
@@ -213,9 +243,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
-        );
+        _snack(e.toString().replaceFirst('Exception: ', ''), error: true);
         setState(() {
           rows = const [];
           total = 0;
@@ -235,26 +263,33 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  Widget? _fxSubtitle(dynamic amount, String? currency, ColorScheme cs) {
-    final cur = (currency ?? '').trim().toUpperCase();
-    final n = amount is num && amount.isFinite ? amount.toDouble() : _parseMoneyNumber(amount);
-    final rate = usdToTjs;
-    if (n == null || n == 0 || rate == null || rate <= 0) return null;
-    if (cur == 'TJS') {
-      final usd = n / rate;
-      return Text(
-        '≈ ${_formatMoneyRu(usd)} USD',
-        style: TextStyle(fontSize: 11, height: 1.35, color: cs.onSurfaceVariant),
-      );
+  Future<void> _exportExcel() async {
+    setState(() => exporting = true);
+    try {
+      final qp = <String, String>{'page': '1', 'page_size': '5000'};
+      if (dateRange != null) {
+        qp['date_from'] = _fmtYmd(dateRange!.start);
+        qp['date_to'] = _fmtYmd(dateRange!.end);
+      }
+      if (search.trim().isNotEmpty) qp['search'] = search.trim();
+      if (kindFilter != null && kindFilter!.isNotEmpty) qp['kind'] = kindFilter!;
+      if (outletFilter != null) qp['outlet_id'] = outletFilter.toString();
+
+      final res = await context.read<ApiClient>().get('inventory/history/feed/?${Uri(queryParameters: qp).query}');
+      if (!mounted) return;
+      if (res.statusCode != 200) throw Exception('Ошибка экспорта');
+      final d = jsonDecode(res.body) as Map<String, dynamic>;
+      final list = (d['results'] as List?) ?? [];
+      if (list.isEmpty) {
+        _snack('Нет данных', error: true);
+        return;
+      }
+      _snack('Экспорт Excel доступен в веб-версии tojir.tj');
+    } catch (e) {
+      _snack(e.toString(), error: true);
+    } finally {
+      if (mounted) setState(() => exporting = false);
     }
-    if (cur == 'USD') {
-      final tjs = n * rate;
-      return Text(
-        '≈ ${_formatMoneyRu(tjs)} TJS',
-        style: TextStyle(fontSize: 11, height: 1.35, color: cs.onSurfaceVariant),
-      );
-    }
-    return null;
   }
 
   Future<void> _pickDateRange() async {
@@ -268,43 +303,220 @@ class _HistoryScreenState extends State<HistoryScreen> {
       helpText: 'Период',
       cancelText: 'Отмена',
       confirmText: 'ОК',
+      locale: const Locale('ru'),
     );
     if (picked == null || !mounted) return;
     setState(() {
       dateRange = picked;
-      datePresetKey = 'period';
       page = 1;
     });
     await _loadFeed();
   }
 
-  void _clearDateRange() {
-    setState(() {
-      dateRange = null;
-      datePresetKey = null;
-      page = 1;
-    });
-    _loadFeed();
-  }
-
-  void _applyDateQuick(String kind) {
-    if (kind == 'period') {
-      _pickDateRange();
-      return;
+  Widget? _fxLine(dynamic amount, String? currency) {
+    final cur = (currency ?? '').trim().toUpperCase();
+    final n = amount is num && amount.isFinite ? amount.toDouble() : _parseMoneyNumber(amount);
+    final rate = usdToTjs;
+    if (n == null || n == 0 || rate == null || rate <= 0) return null;
+    if (cur == 'TJS') {
+      return Text('≈ ${_formatMoneyRu(n / rate)} USD', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.45)));
     }
-    final r = DateRangePresets.rangeForPreset(kind);
-    if (r == null) return;
-    setState(() {
-      datePresetKey = kind;
-      dateRange = r;
-      page = 1;
-    });
-    _loadFeed();
+    if (cur == 'USD') {
+      return Text('≈ ${_formatMoneyRu(n * rate)} TJS', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.45)));
+    }
+    return null;
   }
 
-  int get _totalPages {
-    if (total <= 0) return 1;
-    return (total + pageSize - 1) ~/ pageSize;
+  ({Color bg, Color border, Color text}) _amountStyle(String kind) {
+    switch (kind) {
+      case 'expense':
+      case 'return':
+        return (bg: const Color(0xFFEF4444).withValues(alpha: 0.1), border: const Color(0xFFEF4444).withValues(alpha: 0.22), text: const Color(0xFFFCA5A5));
+      case 'transfer':
+        return (bg: const Color(0xFF06B6D4).withValues(alpha: 0.1), border: const Color(0xFF06B6D4).withValues(alpha: 0.22), text: const Color(0xFF67E8F9));
+      case 'debt_payment':
+        return (bg: _blue.withValues(alpha: 0.1), border: _blue.withValues(alpha: 0.22), text: const Color(0xFF93C5FD));
+      case 'debt_new':
+        return (bg: const Color(0xFFA855F7).withValues(alpha: 0.1), border: const Color(0xFFA855F7).withValues(alpha: 0.22), text: const Color(0xFFD8B4FE));
+      default:
+        return (bg: const Color(0xFF22C55E).withValues(alpha: 0.1), border: const Color(0xFF22C55E).withValues(alpha: 0.22), text: const Color(0xFF86EFAC));
+    }
+  }
+
+  Widget _kindTag(String kind, String label) {
+    final color = _kindTagColors[kind] ?? _blue;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color.withValues(alpha: 0.95), height: 1.4)),
+    );
+  }
+
+  Widget _mobileCard(Map<String, dynamic> r) {
+    final kind = (r['kind'] ?? '').toString();
+    final label = (r['kind_label'] ?? kind).toString();
+    final summary = (r['summary'] ?? '—').toString();
+    final amount = r['amount'];
+    final currency = r['currency']?.toString();
+    final outletName = (r['outlet_name'] ?? '').toString().trim();
+    final amountStyle = _amountStyle(kind);
+
+    String amountText = '';
+    if (amount != null) {
+      final n = _parseMoneyNumber(amount);
+      amountText = n != null ? '${_formatMoneyRu(n)} ${currency ?? ''}'.trim() : amount.toString();
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              _kindTag(kind, label),
+              const Spacer(),
+              Text(_formatAtShort(r['at']), style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.5))),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(summary, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, height: 1.35, color: Colors.white.withValues(alpha: 0.92))),
+          if (amount != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: amountStyle.bg,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: amountStyle.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(amountText, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: amountStyle.text, height: 1.25)),
+                  if (_fxLine(amount, currency) != null) _fxLine(amount, currency)!,
+                ],
+              ),
+            ),
+          ],
+          if (outletName.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Магазин', style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.45))),
+                  const SizedBox(height: 2),
+                  Text(outletName, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white.withValues(alpha: 0.88))),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _filtersPanel(ColorScheme cs, bool dark) {
+    final fieldBorder = dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DropdownButtonFormField<String?>(
+            value: kindFilter,
+            decoration: const InputDecoration(labelText: 'Тип операции', border: OutlineInputBorder(), isDense: true),
+            items: [
+              const DropdownMenuItem<String?>(value: null, child: Text('Все типы')),
+              ..._kindFilterOptions.map((e) => DropdownMenuItem<String?>(value: e.key, child: Text(e.value))),
+            ],
+            onChanged: (v) {
+              setState(() {
+                kindFilter = v;
+                page = 1;
+              });
+              _loadFeed();
+            },
+          ),
+          if (_showOutletFilter) ...[
+            const SizedBox(height: 8),
+            DropdownButtonFormField<int?>(
+              value: outletFilter,
+              decoration: const InputDecoration(labelText: 'Магазин', border: OutlineInputBorder(), isDense: true),
+              items: [
+                const DropdownMenuItem<int?>(value: null, child: Text('Все магазины')),
+                ...outletOptions.map((o) {
+                  final id = _asInt(o['id']);
+                  if (id == null) return null;
+                  return DropdownMenuItem<int?>(value: id, child: Text((o['name'] ?? 'Магазин #$id').toString()));
+                }).whereType<DropdownMenuItem<int?>>(),
+              ],
+              onChanged: (v) {
+                setState(() {
+                  outletFilter = v;
+                  page = 1;
+                });
+                _loadFeed();
+              },
+            ),
+          ],
+          const SizedBox(height: 8),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: _pickDateRange,
+              child: Ink(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: fieldBorder),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(child: Text(dateRange != null ? _fmtYmd(dateRange!.start) : 'Дата от', style: TextStyle(fontSize: 13, color: dateRange != null ? cs.onSurface : cs.onSurfaceVariant))),
+                    Icon(Icons.arrow_forward_rounded, size: 14, color: cs.onSurfaceVariant),
+                    Expanded(child: Text(dateRange != null ? _fmtYmd(dateRange!.end) : 'Дата до', textAlign: TextAlign.end, style: TextStyle(fontSize: 13, color: dateRange != null ? cs.onSurface : cs.onSurfaceVariant))),
+                    const SizedBox(width: 8),
+                    Icon(Icons.calendar_month_rounded, size: 18, color: cs.onSurfaceVariant),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (_activeFilterCount > 0) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(onPressed: _clearFilters, child: const Text('Сбросить фильтры')),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -312,11 +524,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final u = context.watch<SessionController>().user;
     final cs = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final fieldBorder = dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08);
 
     if (u == null || !canAccessSection(u, 'history', null)) {
-      return const AppScaffold(
-        child: SafeArea(top: false, child: Center(child: Text('Нет доступа'))),
-      );
+      return const AppScaffold(child: SafeArea(top: false, child: Center(child: Text('Нет доступа'))));
     }
 
     return AppScaffold(
@@ -329,448 +540,131 @@ class _HistoryScreenState extends State<HistoryScreen> {
             await _loadFeed();
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-            children: [
-              Text(
-                'История',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _isSeller
-                    ? 'Ваши операции: продажи, возвраты, перемещения, расходы, долги и оплаты, которые вы оформили.'
-                    : 'Все операции по вашему складу: видно, кто и в каком магазине действовал.',
-                style: TextStyle(fontSize: 13, height: 1.4, color: cs.onSurfaceVariant),
-              ),
-              const SizedBox(height: 14),
-              _FilterCard(
-                dark: dark,
-                cs: cs,
-                searchCtrl: searchCtrl,
-                kindFilter: kindFilter,
-                onKindChanged: (v) {
-                  setState(() {
-                    kindFilter = v;
-                    page = 1;
-                  });
-                  _loadFeed();
-                },
-                showOutletFilter: _showOutletFilter,
-                outletOptions: outletOptions,
-                outletFilter: outletFilter,
-                onOutletChanged: (v) {
-                  setState(() {
-                    outletFilter = v;
-                    page = 1;
-                  });
-                  _loadFeed();
-                },
-                dateRange: dateRange,
-                datePresetKey: datePresetKey,
-                onToday: () => _applyDateQuick('today'),
-                onWeek: () => _applyDateQuick('week'),
-                onMonth: () => _applyDateQuick('month'),
-                onPeriod: () => _applyDateQuick('period'),
-                onClearRange: dateRange != null ? _clearDateRange : null,
-              ),
-              const SizedBox(height: 14),
-              if (loading && rows.isEmpty) const SkeletonListBlock(rows: 7)
-else if (rows.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 28),
-                  child: Text(
-                    'Нет записей за выбранный период.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: cs.onSurfaceVariant),
-                  ),
-                )
-              else ...[
-                for (final r in rows)
-                  _HistoryRowCard(
-                    record: r,
-                    cs: cs,
-                    dark: dark,
-                    showWarehouse: !_isSeller,
-                    showActor: !_isSeller,
-                    formatAt: _formatAt,
-                    formatMoney: _formatMoneyRu,
-                    parseMoney: _parseMoneyNumber,
-                    fxSubtitle: _fxSubtitle,
-                    kindColors: _kindColors,
-                  ),
-              ],
-              const SizedBox(height: 16),
-              _PaginationBar(
-                cs: cs,
-                page: page,
-                totalPages: _totalPages,
-                pageSize: pageSize,
-                total: total,
-                loading: loading,
-                onPrev: page > 1
-                    ? () {
-                        setState(() => page -= 1);
-                        _loadFeed();
-                      }
-                    : null,
-                onNext: page < _totalPages
-                    ? () {
-                        setState(() => page += 1);
-                        _loadFeed();
-                      }
-                    : null,
-                onPageSize: (ps) {
-                  setState(() {
-                    pageSize = ps;
-                    page = 1;
-                  });
-                  _loadFeed();
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FilterCard extends StatelessWidget {
-  const _FilterCard({
-    required this.dark,
-    required this.cs,
-    required this.searchCtrl,
-    required this.kindFilter,
-    required this.onKindChanged,
-    required this.showOutletFilter,
-    required this.outletOptions,
-    required this.outletFilter,
-    required this.onOutletChanged,
-    required this.dateRange,
-    required this.datePresetKey,
-    required this.onToday,
-    required this.onWeek,
-    required this.onMonth,
-    required this.onPeriod,
-    this.onClearRange,
-  });
-
-  final bool dark;
-  final ColorScheme cs;
-  final TextEditingController searchCtrl;
-  final String? kindFilter;
-  final void Function(String?) onKindChanged;
-  final bool showOutletFilter;
-  final List<Map<String, dynamic>> outletOptions;
-  final int? outletFilter;
-  final void Function(int?) onOutletChanged;
-  final DateTimeRange? dateRange;
-  final String? datePresetKey;
-  final VoidCallback onToday;
-  final VoidCallback onWeek;
-  final VoidCallback onMonth;
-  final VoidCallback onPeriod;
-  final VoidCallback? onClearRange;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: AppShape.br,
-        color: dark ? const Color(0xFF334155) : Colors.white,
-        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: dark ? 0.18 : 0.07),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: searchCtrl,
-            decoration: InputDecoration(
-              isDense: true,
-              prefixIcon: const Icon(Icons.search_rounded, size: 22),
-              hintText: 'Поиск по описанию, типу, сотруднику, магазину',
-              hintStyle: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
-            ),
-          ),
-          const SizedBox(height: 12),
-          InputDecorator(
-            decoration: const InputDecoration(isDense: true, labelText: 'Тип операции', border: OutlineInputBorder()),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String?>(
-                isExpanded: true,
-                value: kindFilter,
-                hint: const Text('Все типы'),
-                items: [
-                  const DropdownMenuItem<String?>(value: null, child: Text('Все типы')),
-                  ..._kindFilterOptions.map(
-                    (e) => DropdownMenuItem<String?>(value: e.key, child: Text(e.value)),
-                  ),
-                ],
-                onChanged: onKindChanged,
-              ),
-            ),
-          ),
-          if (showOutletFilter) ...[
-            const SizedBox(height: 10),
-            InputDecorator(
-              decoration: const InputDecoration(isDense: true, labelText: 'Магазин', border: OutlineInputBorder()),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<int?>(
-                  isExpanded: true,
-                  value: outletFilter,
-                  hint: const Text('Все магазины'),
-                  items: [
-                    const DropdownMenuItem<int?>(value: null, child: Text('Все магазины')),
-                    ...outletOptions.map((o) {
-                      final id = _asInt(o['id']);
-                      if (id == null) return null;
-                      return DropdownMenuItem<int?>(
-                        value: id,
-                        child: Text((o['name'] ?? 'Магазин #$id').toString()),
-                      );
-                    }).whereType<DropdownMenuItem<int?>>(),
-                  ],
-                  onChanged: onOutletChanged,
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Text('Период', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
-          const SizedBox(height: 8),
-          QuickDateRangeChips(
-            colorScheme: cs,
-            selected: datePresetKey,
-            onToday: onToday,
-            onWeek: onWeek,
-            onMonth: onMonth,
-            onPeriod: onPeriod,
-          ),
-          if (dateRange != null) ...[
-            const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Text(
-                    '${dateRange!.start.year}-${dateRange!.start.month.toString().padLeft(2, '0')}-${dateRange!.start.day.toString().padLeft(2, '0')} — ${dateRange!.end.year}-${dateRange!.end.month.toString().padLeft(2, '0')}-${dateRange!.end.day.toString().padLeft(2, '0')}',
-                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-                  ),
-                ),
-                if (onClearRange != null)
-                  TextButton(
-                    onPressed: onClearRange,
-                    child: const Text('Сбросить'),
-                  ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _HistoryRowCard extends StatelessWidget {
-  const _HistoryRowCard({
-    required this.record,
-    required this.cs,
-    required this.dark,
-    required this.showWarehouse,
-    required this.showActor,
-    required this.formatAt,
-    required this.formatMoney,
-    required this.parseMoney,
-    required this.fxSubtitle,
-    required this.kindColors,
-  });
-
-  final Map<String, dynamic> record;
-  final ColorScheme cs;
-  final bool dark;
-  final bool showWarehouse;
-  final bool showActor;
-  final String Function(dynamic) formatAt;
-  final String Function(double) formatMoney;
-  final double? Function(dynamic) parseMoney;
-  final Widget? Function(dynamic amount, String? currency, ColorScheme cs) fxSubtitle;
-  final Map<String, Color> kindColors;
-
-  @override
-  Widget build(BuildContext context) {
-    final kind = (record['kind'] ?? '').toString();
-    final label = (record['kind_label'] ?? kind).toString();
-    final tagColor = kindColors[kind] ?? cs.primary;
-    final amount = record['amount'];
-    final currency = record['currency']?.toString();
-    String amountLine = '—';
-    if (amount != null) {
-      final n = parseMoney(amount);
-      amountLine = n != null ? '${formatMoney(n)} ${currency ?? ''}'.trim() : amount.toString();
-    }
-    final fx = fxSubtitle(amount, currency, cs);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Material(
-        color: dark ? const Color(0xFF253245) : const Color(0xFFF8FAFC),
-        borderRadius: AppShape.br,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             children: [
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: Text('История', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface))),
+                  OutlinedButton.icon(
+                    onPressed: exporting ? null : _exportExcel,
+                    icon: exporting
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.download_outlined, size: 18),
+                    label: const Text('Excel'),
+                    style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
                 children: [
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          formatAt(record['at']),
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant),
+                    child: TextField(
+                      controller: searchCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'Поиск...',
+                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.search_rounded, size: 20),
+                          onPressed: () => _applySearch(),
                         ),
-                        const SizedBox(height: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: tagColor.withValues(alpha: dark ? 0.28 : 0.18),
-                            borderRadius: AppShape.br,
-                          ),
-                          child: Text(
-                            label,
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: cs.onSurface),
-                          ),
-                        ),
-                      ],
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        filled: true,
+                        fillColor: dark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.02),
+                      ),
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: _applySearch,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(amountLine, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: cs.onSurface)),
-                      ?fx,
-                    ],
+                  OutlinedButton.icon(
+                    onPressed: () => setState(() => filtersOpen = !filtersOpen),
+                    icon: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        const Icon(Icons.filter_list_rounded, size: 18),
+                        if (_activeFilterCount > 0)
+                          Positioned(
+                            right: -6,
+                            top: -4,
+                            child: Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: const BoxDecoration(color: _blue, shape: BoxShape.circle),
+                              constraints: const BoxConstraints(minWidth: 14, minHeight: 14),
+                              child: Text(
+                                '$_activeFilterCount',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    label: const Text('Фильтры'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 40),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10), side: BorderSide(color: fieldBorder)),
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                (record['summary'] ?? '—').toString(),
-                style: TextStyle(fontSize: 13, height: 1.35, color: cs.onSurface),
-              ),
-              if (showWarehouse) ...[
-                const SizedBox(height: 6),
+              if (filtersOpen) _filtersPanel(cs, dark),
+              if (total > 0) ...[
+                const SizedBox(height: 4),
                 Text(
-                  'Склад: ${(record['warehouse_name'] ?? '—').toString()}',
+                  '${_formatIntRu(total)} записей',
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                 ),
               ],
-              const SizedBox(height: 4),
-              Text(
-                'Магазин: ${(record['outlet_name'] ?? '—').toString()}',
-                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
-              ),
-              if (showActor) ...[
-                const SizedBox(height: 4),
-                Text(
-                  'Кто: ${(record['actor_name'] ?? '—').toString()}',
-                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              const SizedBox(height: 8),
+              if (loading && rows.isEmpty)
+                const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+              else if (loading)
+                const SkeletonListBlock(rows: 5)
+              else if (rows.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Text('Нет записей за выбранный период', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: cs.onSurfaceVariant)),
+                )
+              else
+                for (final r in rows) _mobileCard(r),
+              if (total > _mobilePageSize) ...[
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                      onPressed: page > 1 && !loading
+                          ? () {
+                              setState(() => page--);
+                              _loadFeed();
+                            }
+                          : null,
+                      icon: const Icon(Icons.chevron_left_rounded),
+                    ),
+                    Text('$page / $_totalPages', style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+                    IconButton(
+                      onPressed: page < _totalPages && !loading
+                          ? () {
+                              setState(() => page++);
+                              _loadFeed();
+                            }
+                          : null,
+                      icon: const Icon(Icons.chevron_right_rounded),
+                    ),
+                  ],
                 ),
               ],
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _PaginationBar extends StatelessWidget {
-  const _PaginationBar({
-    required this.cs,
-    required this.page,
-    required this.totalPages,
-    required this.pageSize,
-    required this.total,
-    required this.loading,
-    this.onPrev,
-    this.onNext,
-    required this.onPageSize,
-  });
-
-  final ColorScheme cs;
-  final int page;
-  final int totalPages;
-  final int pageSize;
-  final int total;
-  final bool loading;
-  final VoidCallback? onPrev;
-  final VoidCallback? onNext;
-  final void Function(int) onPageSize;
-
-  @override
-  Widget build(BuildContext context) {
-    final from = total == 0 ? 0 : (page - 1) * pageSize + 1;
-    final to = (page * pageSize).clamp(0, total);
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      decoration: BoxDecoration(
-        borderRadius: AppShape.br,
-        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-      ),
-      child: Column(
-        children: [
-          Text(
-            total == 0 ? '0 записей' : '$from–$to из $total',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton.filledTonal(
-                onPressed: loading ? null : onPrev,
-                icon: const Icon(Icons.chevron_left_rounded),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text('Стр. $page / $totalPages', style: TextStyle(fontWeight: FontWeight.w700, color: cs.onSurface)),
-              ),
-              IconButton.filledTonal(
-                onPressed: loading ? null : onNext,
-                icon: const Icon(Icons.chevron_right_rounded),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 6,
-            children: [20, 40, 80, 100].map((ps) {
-              final sel = ps == pageSize;
-              return ChoiceChip(
-                label: Text('$ps'),
-                selected: sel,
-                onSelected: loading
-                    ? null
-                    : (_) {
-                        if (!sel) onPageSize(ps);
-                      },
-              );
-            }).toList(),
-          ),
-        ],
       ),
     );
   }

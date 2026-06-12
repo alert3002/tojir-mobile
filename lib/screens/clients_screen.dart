@@ -140,7 +140,7 @@ class _ClientsScreenState extends State<ClientsScreen> {
         child: RefreshIndicator(
           onRefresh: _load,
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             children: [
               Row(
                 children: [
@@ -157,11 +157,11 @@ class _ClientsScreenState extends State<ClientsScreen> {
                 'Покупатели с указанным телефоном в продаже: имя, номер, товар, склад и магазин по каждой продаже.',
                 style: TextStyle(fontSize: 13, height: 1.4, color: cs.onSurfaceVariant),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               Container(
                 decoration: BoxDecoration(
                   borderRadius: AppShape.br,
-                  color: dark ? const Color(0xFF334155) : Colors.white,
+                  color: cs.surfaceContainerLow,
                   border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
                   boxShadow: [
                     BoxShadow(
@@ -197,7 +197,7 @@ else if (filtered.isEmpty)
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     borderRadius: AppShape.br,
-                    color: dark ? const Color(0xFF334155) : cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                    color: cs.surfaceContainerHighest.withValues(alpha: dark ? 0.45 : 0.55),
                     border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.35)),
                   ),
                   child: Text(
@@ -233,7 +233,7 @@ class _ClientExpansionTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
-        color: dark ? const Color(0xFF253245) : const Color(0xFFF8FAFC),
+        color: cs.surfaceContainer,
         borderRadius: AppShape.br,
         clipBehavior: Clip.antiAlias,
         child: Theme(

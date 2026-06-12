@@ -6,10 +6,13 @@ import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
-import '../theme/app_shape.dart';
+import '../theme/app_brand.dart';
 import '../utils/permissions.dart';
+import '../utils/product_scan_utils.dart';
 import '../widgets/app_scaffold.dart';
 import '../widgets/skeleton_loading.dart';
+
+const _historyPageSize = 15;
 
 const _unitLabels = <String, String>{
   'pcs': 'шт',
@@ -59,6 +62,21 @@ double? _asDouble(dynamic v) {
 String _fmtYmd(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+String _fmtRuDateTime(dynamic raw) {
+  if (raw == null) return '—';
+  final s = raw.toString().trim();
+  if (s.isEmpty) return '—';
+  try {
+    final dt = DateTime.parse(s);
+    final d = '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+    final t = '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    return '$d, $t';
+  } catch (_) {
+    final norm = s.replaceFirst('T', ' ');
+    return norm.length > 16 ? norm.substring(0, 16) : norm;
+  }
+}
+
 String _unitShort(String? u) => _unitLabels[u ?? ''] ?? u ?? 'шт';
 
 String _productLineLabel(Map<String, dynamic> p) {
@@ -69,6 +87,15 @@ String _productLineLabel(Map<String, dynamic> p) {
   if (model.isNotEmpty) bits.add(model);
   if (brand.isNotEmpty) bits.add(brand);
   return bits.join(' · ');
+}
+
+String _productOptionLabel(Map<String, dynamic> p, {required bool fromOutlet}) {
+  final unit = _unitShort(p['unit']?.toString());
+  final availRaw = fromOutlet ? p['outlet_stock_quantity'] : p['quantity'];
+  final avail = _asDouble(availRaw);
+  final availText = avail != null ? 'Ост: $avail $unit' : 'Ед: $unit';
+  final label = '${_productLineLabel(p)} · $availText';
+  return label.length > 170 ? label.substring(0, 170) : label;
 }
 
 class TransfersScreen extends StatefulWidget {
@@ -98,14 +125,19 @@ class _TransfersScreenState extends State<TransfersScreen> {
   int? toOutletId;
   int? selectedProductId;
   String? selectedProductUnit;
-  String? selectedProductLabel;
-  Map<String, dynamic>? selectedProductSnapshot;
 
+  final TextEditingController scanCtrl = TextEditingController();
+  final TextEditingController productSearchCtrl = TextEditingController();
   final TextEditingController quantityCtrl = TextEditingController();
   final TextEditingController noteCtrl = TextEditingController();
   final TextEditingController historySearchCtrl = TextEditingController();
+
+  String productSearch = '';
   String historySearch = '';
   DateTimeRange? historyDateRange;
+  int historyPage = 1;
+
+  Timer? _productSearchDebounce;
 
   Map<String, dynamic>? get _user => context.read<SessionController>().user;
 
@@ -130,9 +162,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
   @override
   void initState() {
     super.initState();
+    if (_isSeller) fromType = 'outlet';
+    productSearchCtrl.addListener(_onProductSearchChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadWarehouses();
-      if (!_isSeller) fromType = 'warehouse';
       await _loadOutlets();
       if (_isSeller) await _loadSellerFromOutlets();
       await _loadProducts();
@@ -140,8 +173,21 @@ class _TransfersScreenState extends State<TransfersScreen> {
     });
   }
 
+  void _onProductSearchChanged() {
+    final v = productSearchCtrl.text;
+    if (v == productSearch) return;
+    productSearch = v;
+    _productSearchDebounce?.cancel();
+    _productSearchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) _loadProducts();
+    });
+  }
+
   @override
   void dispose() {
+    _productSearchDebounce?.cancel();
+    scanCtrl.dispose();
+    productSearchCtrl.dispose();
     quantityCtrl.dispose();
     noteCtrl.dispose();
     historySearchCtrl.dispose();
@@ -234,6 +280,7 @@ class _TransfersScreenState extends State<TransfersScreen> {
     setState(() => productsLoading = true);
     try {
       final qp = <String, String>{'warehouse': wh.toString()};
+      if (productSearch.trim().isNotEmpty) qp['search'] = productSearch.trim();
       if (fromType == 'outlet' && fromOutletId != null) qp['outlet'] = fromOutletId.toString();
       final path = 'inventory/products/?${Uri(queryParameters: qp).query}';
       final res = await context.read<ApiClient>().get(path);
@@ -274,7 +321,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
         final d = jsonDecode(res.body);
         final list = d is List ? d : (d is Map ? (d['results'] ?? d['data']) : null);
         final items = (list is List) ? list.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
-        setState(() => transferRows = items);
+        setState(() {
+          transferRows = items;
+          historyPage = 1;
+        });
       } else {
         setState(() => transferRows = const []);
       }
@@ -285,15 +335,58 @@ class _TransfersScreenState extends State<TransfersScreen> {
     }
   }
 
+  Map<String, dynamic>? _findProductByCode(String raw) {
+    final norm = normalizeScanCode(raw).toLowerCase();
+    if (norm.isEmpty) return null;
+    for (final p in products) {
+      final barcode = normalizeScanCode((p['barcode'] ?? '').toString()).toLowerCase();
+      final sku = normalizeScanCode((p['sku'] ?? '').toString()).toLowerCase();
+      if (barcode == norm || sku == norm) return p;
+    }
+    for (final p in products) {
+      final name = (p['name'] ?? '').toString().toLowerCase();
+      if (name.contains(norm)) return p;
+    }
+    return null;
+  }
+
+  void _selectProduct(Map<String, dynamic> p) {
+    final id = _asInt(p['id']);
+    if (id == null) return;
+    setState(() {
+      selectedProductId = id;
+      selectedProductUnit = (p['unit'] ?? 'pcs').toString();
+      quantityCtrl.clear();
+    });
+  }
+
+  Future<void> _onScanProduct(String raw) async {
+    final norm = normalizeScanCode(raw);
+    if (norm.isEmpty) return;
+    var match = _findProductByCode(norm);
+    if (match == null) {
+      setState(() {
+        productSearch = norm;
+        productSearchCtrl.text = norm;
+      });
+      await _loadProducts();
+      match = _findProductByCode(norm);
+    }
+    if (match != null) {
+      _selectProduct(match);
+      _snack('Товар: ${match['name'] ?? '—'}');
+      scanCtrl.clear();
+    } else {
+      _snack('Товар не найден', error: true);
+    }
+  }
+
   Map<String, dynamic>? _selectedProductMap() {
     if (selectedProductId == null) return null;
-    if (selectedProductSnapshot != null && _asInt(selectedProductSnapshot!['id']) == selectedProductId) {
-      return selectedProductSnapshot;
-    }
     for (final p in products) {
       if (_asInt(p['id']) == selectedProductId) return p;
     }
-    return selectedProductSnapshot;
+    return null;
   }
 
   double? _availableForProduct(Map<String, dynamic>? p) {
@@ -382,15 +475,10 @@ class _TransfersScreenState extends State<TransfersScreen> {
       setState(() {
         selectedProductId = null;
         selectedProductUnit = null;
-        selectedProductLabel = null;
-        selectedProductSnapshot = null;
         quantityCtrl.clear();
         noteCtrl.clear();
         if (!_isSeller) fromOutletId = null;
       });
-      if (_isSeller && sellerToOutletId != null) {
-        // to_outlet остаётся тем же
-      }
       await _loadProducts();
       await _loadTransfers();
       if (_isSeller) await _loadSellerFromOutlets();
@@ -403,45 +491,23 @@ class _TransfersScreenState extends State<TransfersScreen> {
 
   Future<void> _pickHistoryRange() async {
     final now = DateTime.now();
-    final initial = historyDateRange ?? DateTimeRange(start: now.subtract(const Duration(days: 30)), end: now);
     final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2020),
       lastDate: DateTime(now.year + 1),
-      initialDateRange: initial,
-      helpText: 'Период',
-      cancelText: 'Отмена',
-      confirmText: 'ОК',
+      initialDateRange: historyDateRange ?? DateTimeRange(start: now.subtract(const Duration(days: 30)), end: now),
     );
     if (picked == null || !mounted) return;
     setState(() => historyDateRange = picked);
     await _loadTransfers();
   }
 
-  Future<void> _openProductPicker() async {
-    final wh = _effectiveWarehouse;
-    if (wh == null) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _TransferProductPickerSheet(
-        warehouseId: wh,
-        outletId: fromType == 'outlet' ? fromOutletId : null,
-        api: context.read<ApiClient>(),
-        onPick: (Map<String, dynamic> p) {
-          final id = _asInt(p['id']);
-          if (id == null) return;
-          setState(() {
-            selectedProductId = id;
-            selectedProductUnit = (p['unit'] ?? 'pcs').toString();
-            selectedProductLabel = _productLineLabel(p);
-            selectedProductSnapshot = Map<String, dynamic>.from(p);
-            quantityCtrl.clear();
-          });
-          Navigator.of(ctx).pop();
-        },
-      ),
+  InputDecoration _fieldDecoration({String? label, String? hint, bool required = false}) {
+    return InputDecoration(
+      isDense: true,
+      labelText: required && label != null ? '$label *' : label,
+      hintText: hint,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     );
   }
 
@@ -462,6 +528,7 @@ class _TransfersScreenState extends State<TransfersScreen> {
     final p = _selectedProductMap();
     final unit = selectedProductUnit ?? (p?['unit'] ?? 'pcs').toString();
     final avail = _availableForProduct(p);
+    final historySlice = transferRows.skip((historyPage - 1) * _historyPageSize).take(_historyPageSize).toList();
 
     return AppScaffold(
       child: SafeArea(
@@ -475,200 +542,271 @@ class _TransfersScreenState extends State<TransfersScreen> {
             await _loadTransfers();
           },
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
             children: [
-              Text('Перемещения', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
-              const SizedBox(height: 14),
+              Text('Перемещения', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: cs.onSurface, height: 1.25)),
+              const SizedBox(height: 10),
               _TransfersCard(
-                dark: dark,
-                cs: cs,
                 title: 'Оформить перемещение',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (_showWarehouseSelect) ...[
-                      Text('Склад', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
-                      const SizedBox(height: 6),
-                      InputDecorator(
-                        decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<int?>(
-                            isExpanded: true,
-                            value: selectedWarehouseId,
-                            hint: const Text('Склад'),
-                            items: [
-                              const DropdownMenuItem<int?>(value: null, child: Text('Не выбран')),
-                              ...warehouses.map((w) {
-                                final id = _asInt(w['id']);
-                                if (id == null) return null;
-                                return DropdownMenuItem<int?>(
-                                  value: id,
-                                  child: Text((w['name'] ?? 'Склад $id').toString()),
-                                );
-                              }).whereType<DropdownMenuItem<int?>>(),
-                            ],
-                            onChanged: (v) async {
-                              setState(() {
-                                selectedWarehouseId = v;
-                                fromOutletId = null;
-                                toOutletId = null;
-                                selectedProductId = null;
-                                selectedProductLabel = null;
-                                selectedProductSnapshot = null;
-                                quantityCtrl.clear();
-                              });
-                              await _loadProducts();
-                              await _loadTransfers();
-                            },
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (!_isSeller) ...[
-                      Text('Откуда', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
-                      const SizedBox(height: 6),
-                      SegmentedButton<String>(
-                        segments: const [
-                          ButtonSegment(value: 'warehouse', label: Text('Склад')),
-                          ButtonSegment(value: 'outlet', label: Text('Магазин')),
-                        ],
-                        selected: {fromType},
-                        onSelectionChanged: (s) async {
-                          setState(() {
-                            fromType = s.first;
-                            fromOutletId = null;
-                            selectedProductId = null;
-                            selectedProductLabel = null;
-                            selectedProductSnapshot = null;
-                            quantityCtrl.clear();
-                          });
-                          await _loadProducts();
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (fromType == 'outlet' || _isSeller) ...[
-                      Text('Из магазина', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
-                      const SizedBox(height: 6),
-                      if (loadingSellerFrom && _isSeller)
-                        Text('Загрузка…', style: TextStyle(color: cs.onSurfaceVariant))
-                      else
-                        InputDecorator(
-                          decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<int?>(
+                      Row(
+                        children: [
+                          Text('Склад:', style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: DropdownButtonFormField<int?>(
+                              key: ValueKey('wh-$selectedWarehouseId'),
+                              initialValue: selectedWarehouseId,
                               isExpanded: true,
-                              value: fromOutletId,
-                              hint: const Text('Магазин'),
-                              items: fromOutletList
-                                  .map((o) {
-                                    final id = _asInt(o['id']);
-                                    if (id == null) return null;
-                                    final name = (o['name'] ?? '').toString().trim();
-                                    return DropdownMenuItem<int?>(
-                                      value: id,
-                                      child: Text(name.isEmpty ? 'Магазин $id' : name),
-                                    );
-                                  })
-                                  .whereType<DropdownMenuItem<int?>>()
-                                  .toList(),
+                              decoration: _fieldDecoration(hint: 'Склад'),
+                              items: [
+                                const DropdownMenuItem<int?>(value: null, child: Text('Не выбран')),
+                                ...warehouses.map((w) {
+                                  final id = _asInt(w['id']);
+                                  if (id == null) return null;
+                                  return DropdownMenuItem<int?>(
+                                    value: id,
+                                    child: Text((w['name'] ?? 'Склад $id').toString()),
+                                  );
+                                }).whereType<DropdownMenuItem<int?>>(),
+                              ],
                               onChanged: (v) async {
                                 setState(() {
-                                  fromOutletId = v;
+                                  selectedWarehouseId = v;
+                                  fromOutletId = null;
+                                  toOutletId = null;
                                   selectedProductId = null;
-                                  selectedProductLabel = null;
-                                  selectedProductSnapshot = null;
+                                  selectedProductUnit = null;
+                                  quantityCtrl.clear();
+                                });
+                                await _loadProducts();
+                                await _loadTransfers();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    if (!_isSeller) ...[
+                      Text('Откуда', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: RadioListTile<String>(
+                              title: const Text('Склад', style: TextStyle(fontSize: 14)),
+                              value: 'warehouse',
+                              groupValue: fromType,
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                              onChanged: (v) async {
+                                if (v == null) return;
+                                setState(() {
+                                  fromType = v;
+                                  fromOutletId = null;
+                                  selectedProductId = null;
+                                  selectedProductUnit = null;
                                   quantityCtrl.clear();
                                 });
                                 await _loadProducts();
                               },
                             ),
                           ),
-                        ),
-                      const SizedBox(height: 12),
+                          Expanded(
+                            child: RadioListTile<String>(
+                              title: const Text('Магазин', style: TextStyle(fontSize: 14)),
+                              value: 'outlet',
+                              groupValue: fromType,
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              visualDensity: VisualDensity.compact,
+                              onChanged: (v) async {
+                                if (v == null) return;
+                                setState(() {
+                                  fromType = v;
+                                  fromOutletId = null;
+                                  selectedProductId = null;
+                                  selectedProductUnit = null;
+                                  quantityCtrl.clear();
+                                });
+                                await _loadProducts();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
                     ],
-                    Text('В магазин', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
+                    if (fromType == 'outlet' || _isSeller) ...[
+                      DropdownButtonFormField<int?>(
+                        key: ValueKey<String>('from-$fromOutletId'),
+                        initialValue: fromOutletId,
+                        isExpanded: true,
+                        decoration: _fieldDecoration(label: 'Из магазина', required: true),
+                        hint: loadingSellerFrom && _isSeller ? const Text('Загрузка…') : const Text('Магазин'),
+                        items: fromOutletList
+                            .map((o) {
+                              final id = _asInt(o['id']);
+                              if (id == null) return null;
+                              final name = (o['name'] ?? '').toString().trim();
+                              return DropdownMenuItem<int?>(
+                                value: id,
+                                child: Text(name.isEmpty ? 'Магазин $id' : name),
+                              );
+                            })
+                            .whereType<DropdownMenuItem<int?>>()
+                            .toList(),
+                        onChanged: (loadingSellerFrom && _isSeller)
+                            ? null
+                            : (v) async {
+                                setState(() {
+                                  fromOutletId = v;
+                                  selectedProductId = null;
+                                  selectedProductUnit = null;
+                                  quantityCtrl.clear();
+                                });
+                                await _loadProducts();
+                              },
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    DropdownButtonFormField<int?>(
+                      key: ValueKey<String>('to-${_isSeller ? sellerToOutletId : toOutletId}'),
+                      initialValue: _isSeller ? sellerToOutletId : toOutletId,
+                      isExpanded: true,
+                      decoration: _fieldDecoration(label: 'В магазин', required: true),
+                      hint: const Text('Магазин'),
+                      items: _isSeller
+                          ? outlets
+                              .where((o) => _asInt(o['id']) == sellerToOutletId)
+                              .map((o) {
+                                final id = _asInt(o['id']);
+                                if (id == null) return null;
+                                final name = (o['name'] ?? '').toString().trim();
+                                return DropdownMenuItem<int?>(
+                                  value: id,
+                                  child: Text(name.isEmpty ? 'Магазин $id' : name),
+                                );
+                              })
+                              .whereType<DropdownMenuItem<int?>>()
+                              .toList()
+                          : outlets
+                              .map((o) {
+                                final id = _asInt(o['id']);
+                                if (id == null) return null;
+                                final name = (o['name'] ?? '').toString().trim();
+                                return DropdownMenuItem<int?>(
+                                  value: id,
+                                  child: Text(name.isEmpty ? 'Магазин $id' : name),
+                                );
+                              })
+                              .whereType<DropdownMenuItem<int?>>()
+                              .toList(),
+                      onChanged: _isSeller ? null : (v) => setState(() => toOutletId = v),
+                    ),
+                    const SizedBox(height: 10),
+                    Text('Сканер', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
                     const SizedBox(height: 6),
-                    if (_isSeller)
-                      InputDecorator(
-                        decoration: InputDecoration(
-                          isDense: true,
-                          border: const OutlineInputBorder(),
-                          filled: true,
-                          fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-                        ),
-                        child: Text(
-                          sellerToOutletId == null
-                              ? '—'
-                              : (() {
-                                  for (final o in outlets) {
-                                    if (_asInt(o['id']) == sellerToOutletId) {
-                                      final name = (o['name'] ?? '').toString().trim();
-                                      return name.isEmpty ? 'Магазин $sellerToOutletId' : name;
-                                    }
-                                  }
-                                  return 'Магазин $sellerToOutletId';
-                                })(),
-                          style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w600),
-                        ),
-                      )
-                    else
-                      InputDecorator(
-                        decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<int?>(
-                            isExpanded: true,
-                            value: toOutletId,
-                            hint: const Text('Магазин'),
-                            items: outlets
-                                .map((o) {
-                                  final id = _asInt(o['id']);
-                                  if (id == null) return null;
-                                  final name = (o['name'] ?? '').toString().trim();
-                                  return DropdownMenuItem<int?>(
-                                    value: id,
-                                    child: Text(name.isEmpty ? 'Магазин $id' : name),
-                                  );
-                                })
-                                .whereType<DropdownMenuItem<int?>>()
-                                .toList(),
-                            onChanged: (v) => setState(() => toOutletId = v),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: scanCtrl,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              prefixIcon: const Icon(Icons.qr_code_2_rounded, size: 20),
+                              hintText: 'Сканируйте штрих-код, IMEI или артикул',
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                            ),
+                            onSubmitted: _onScanProduct,
                           ),
                         ),
-                      ),
-                    const SizedBox(height: 12),
-                    Text('Товар', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
-                    const SizedBox(height: 6),
-                    OutlinedButton.icon(
-                      onPressed: wh == null ? null : _openProductPicker,
-                      icon: const Icon(Icons.inventory_2_outlined, size: 20),
-                      label: Text(
-                        selectedProductLabel ?? 'Выбрать товар',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (productsLoading)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 44,
+                          width: 44,
+                          child: FilledButton(
+                            onPressed: () => _onScanProduct(scanCtrl.text),
+                            style: FilledButton.styleFrom(padding: EdgeInsets.zero, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                            child: const Icon(Icons.center_focus_weak_rounded, size: 22),
+                          ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text('Товар', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: productSearchCtrl,
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: 'Поиск товара',
+                        suffixIcon: productsLoading
+                            ? const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                              )
+                            : IconButton(
+                                icon: const Icon(Icons.search_rounded, size: 20),
+                                onPressed: _loadProducts,
+                              ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                       ),
-                    const SizedBox(height: 12),
-                    Text('Количество (${_unitShort(selectedProductId != null ? unit : null)})', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant)),
-                    if (selectedProductId != null && avail != null)
-                      Text('Остаток: $avail ${_unitShort(unit)}', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                    if (selectedProductId != null)
-                      Text(
-                        'Количество в ${_unitShort(unit)} — как у товара',
-                        style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-                      )
-                    else
-                      Text('Сначала выберите товар', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                      onSubmitted: (_) => _loadProducts(),
+                    ),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<int?>(
+                      key: ValueKey('prod-$selectedProductId-${products.length}'),
+                      initialValue: selectedProductId,
+                      isExpanded: true,
+                      decoration: _fieldDecoration(required: true),
+                      hint: Text(productsLoading ? 'Загрузка…' : 'Поиск товара'),
+                      items: products
+                          .map((pr) {
+                            final id = _asInt(pr['id']);
+                            if (id == null) return null;
+                            return DropdownMenuItem<int?>(
+                              value: id,
+                              child: Text(
+                                _productOptionLabel(pr, fromOutlet: fromType == 'outlet' && fromOutletId != null),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            );
+                          })
+                          .whereType<DropdownMenuItem<int?>>()
+                          .toList(),
+                      onChanged: productsLoading
+                          ? null
+                          : (v) {
+                              if (v == null) {
+                                setState(() {
+                                  selectedProductId = null;
+                                  selectedProductUnit = null;
+                                  quantityCtrl.clear();
+                                });
+                                return;
+                              }
+                              final pr = products.cast<Map<String, dynamic>?>().firstWhere(
+                                    (x) => _asInt(x?['id']) == v,
+                                    orElse: () => null,
+                                  );
+                              if (pr != null) _selectProduct(pr);
+                            },
+                    ),
+                    const SizedBox(height: 10),
+                    Text('Количество', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
+                    const SizedBox(height: 4),
+                    Text(
+                      selectedProductId != null ? 'В ${_unitShort(unit)}' : 'Сначала выберите товар',
+                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                    ),
                     const SizedBox(height: 6),
                     TextField(
                       controller: quantityCtrl,
@@ -676,88 +814,128 @@ class _TransfersScreenState extends State<TransfersScreen> {
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       decoration: InputDecoration(
                         isDense: true,
-                        border: const OutlineInputBorder(),
+                        hintText: selectedProductId != null ? null : 'Выберите товар',
                         suffixText: selectedProductId != null ? _unitShort(unit) : null,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    if (selectedProductId != null && avail != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text('Остаток: $avail ${_unitShort(unit)}', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                      ),
+                    const SizedBox(height: 10),
                     TextField(
                       controller: noteCtrl,
-                      decoration: const InputDecoration(isDense: true, labelText: 'Примечание', hintText: 'Необязательно', border: OutlineInputBorder()),
+                      decoration: _fieldDecoration(label: 'Примечание', hint: 'Необязательно'),
+                      minLines: 1,
+                      maxLines: 2,
                     ),
-                    const SizedBox(height: 14),
-                    FilledButton(
-                      onPressed: submitLoading ? null : _submit,
-                      child: Text(submitLoading ? 'Отправка…' : 'Оформить перемещение'),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 44,
+                      child: FilledButton(
+                        onPressed: submitLoading ? null : _submit,
+                        child: Text(submitLoading ? 'Отправка…' : 'Оформить перемещение', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                      ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 10),
               _TransfersCard(
-                dark: dark,
-                cs: cs,
                 title: 'История перемещений',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     TextField(
                       controller: historySearchCtrl,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         isDense: true,
-                        prefixIcon: Icon(Icons.search_rounded),
                         hintText: 'Поиск по товару',
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.search_rounded, size: 20),
+                          onPressed: () {
+                            historySearch = historySearchCtrl.text;
+                            _loadTransfers();
+                          },
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                       ),
                       onChanged: (v) => historySearch = v,
-                      onSubmitted: (_) => _loadTransfers(),
+                      onSubmitted: (_) {
+                        historySearch = historySearchCtrl.text;
+                        _loadTransfers();
+                      },
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _pickHistoryRange,
-                            icon: const Icon(Icons.date_range_rounded, size: 18),
-                            label: Text(
-                              historyDateRange == null
-                                  ? 'Дата от — до'
-                                  : '${_fmtYmd(historyDateRange!.start)} — ${_fmtYmd(historyDateRange!.end)}',
-                              style: const TextStyle(fontSize: 12),
-                            ),
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(10),
+                        onTap: _pickHistoryRange,
+                        child: Ink(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  historyDateRange != null ? _fmtYmd(historyDateRange!.start) : 'Дата от',
+                                  style: TextStyle(fontSize: 13, color: historyDateRange != null ? cs.onSurface : cs.onSurfaceVariant),
+                                ),
+                              ),
+                              Icon(Icons.arrow_forward_rounded, size: 14, color: cs.onSurfaceVariant),
+                              Expanded(
+                                child: Text(
+                                  historyDateRange != null ? _fmtYmd(historyDateRange!.end) : 'Дата до',
+                                  textAlign: TextAlign.end,
+                                  style: TextStyle(fontSize: 13, color: historyDateRange != null ? cs.onSurface : cs.onSurfaceVariant),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Icon(Icons.calendar_month_rounded, size: 18, color: cs.onSurfaceVariant),
+                            ],
                           ),
                         ),
-                        if (historyDateRange != null)
-                          IconButton(
-                            tooltip: 'Сбросить даты',
-                            onPressed: () async {
-                              setState(() => historyDateRange = null);
-                              await _loadTransfers();
-                            },
-                            icon: const Icon(Icons.clear_rounded),
-                          ),
-                      ],
-                    ),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        onPressed: _loadTransfers,
-                        icon: const Icon(Icons.refresh_rounded, size: 18),
-                        label: const Text('Обновить'),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    if (loadingHistory) const SkeletonListBlock(rows: 5)
-else if (transferRows.isEmpty)
+                    if (historyDateRange != null)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: () async {
+                            setState(() => historyDateRange = null);
+                            await _loadTransfers();
+                          },
+                          child: const Text('Сбросить даты'),
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                    if (loadingHistory)
+                      const SkeletonListBlock(rows: 4)
+                    else if (transferRows.isEmpty)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                         child: Text(
                           _isSeller || wh != null ? 'Нет перемещений' : 'Выберите склад',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: cs.onSurfaceVariant),
+                          style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
                         ),
                       )
-                    else
-                      ...transferRows.take(30).map((r) => _TransferHistoryTile(cs: cs, dark: dark, row: r)),
+                    else ...[
+                      for (final r in historySlice) _TransferHistoryTile(cs: cs, dark: dark, row: r),
+                      if (transferRows.length > _historyPageSize)
+                        _Pager(
+                          page: historyPage,
+                          total: (transferRows.length / _historyPageSize).ceil(),
+                          onPrev: historyPage > 1 ? () => setState(() => historyPage--) : null,
+                          onNext: historyPage * _historyPageSize < transferRows.length ? () => setState(() => historyPage++) : null,
+                        ),
+                    ],
                   ],
                 ),
               ),
@@ -770,37 +948,29 @@ else if (transferRows.isEmpty)
 }
 
 class _TransfersCard extends StatelessWidget {
-  const _TransfersCard({required this.dark, required this.cs, required this.title, required this.child});
-  final bool dark;
-  final ColorScheme cs;
+  const _TransfersCard({required this.title, required this.child});
   final String title;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Container(
-      decoration: BoxDecoration(
-        borderRadius: AppShape.br,
-        color: dark ? const Color(0xFF334155) : Colors.white,
-        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: dark ? 0.18 : 0.07),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
+      decoration: AppBrand.cardDecoration(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            alignment: Alignment.centerLeft,
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.25))),
+            ),
+            child: Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: cs.onSurface)),
           ),
+          Padding(padding: const EdgeInsets.fromLTRB(12, 10, 12, 10), child: child),
         ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(title, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: cs.onSurface)),
-            const SizedBox(height: 12),
-            child,
-          ],
-        ),
       ),
     );
   }
@@ -814,161 +984,61 @@ class _TransferHistoryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final created = (row['created_at'] ?? '').toString().replaceFirst('T', ' ');
-    final short = created.length > 16 ? created.substring(0, 16) : created;
     final from = (row['from_outlet_name'] as String?)?.trim().isNotEmpty == true ? row['from_outlet_name'].toString() : 'Склад';
     final to = (row['to_outlet_name'] ?? '—').toString();
     final prod = (row['product_name'] ?? '—').toString();
     final qty = row['quantity'];
     final u = _unitShort(row['product_unit']?.toString());
+    final qtyStr = qty != null ? '${qty is num ? qty : qty.toString()} $u' : '—';
     final note = (row['note'] ?? '').toString();
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Material(
-        color: dark ? const Color(0xFF253245) : const Color(0xFFF8FAFC),
-        borderRadius: AppShape.br,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(short.isEmpty ? '—' : short, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: cs.onSurfaceVariant)),
-              const SizedBox(height: 6),
-              Text(prod, style: TextStyle(fontWeight: FontWeight.w800, color: cs.onSurface)),
-              const SizedBox(height: 4),
-              Text('Откуда: $from → Куда: $to', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-              Text('Кол-во: ${qty != null ? '$qty $u' : '—'}', style: TextStyle(fontSize: 12, color: cs.onSurface)),
-              if (note.isNotEmpty) Text('Примечание: $note', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant), maxLines: 2, overflow: TextOverflow.ellipsis),
-            ],
-          ),
-        ),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: dark ? AppBrand.darkRow : cs.surfaceContainer,
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(prod, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: cs.onSurface)),
+          const SizedBox(height: 2),
+          Text(_fmtRuDateTime(row['created_at']), style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+          Text('$from → $to', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+          Text('кол-во: $qtyStr', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+          if (note.isNotEmpty) Text(note, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant), maxLines: 2, overflow: TextOverflow.ellipsis),
+        ],
       ),
     );
   }
 }
 
-class _TransferProductPickerSheet extends StatefulWidget {
-  const _TransferProductPickerSheet({
-    required this.warehouseId,
-    required this.outletId,
-    required this.api,
-    required this.onPick,
-  });
-
-  final int warehouseId;
-  final int? outletId;
-  final ApiClient api;
-  final void Function(Map<String, dynamic>) onPick;
-
-  @override
-  State<_TransferProductPickerSheet> createState() => _TransferProductPickerSheetState();
-}
-
-class _TransferProductPickerSheetState extends State<_TransferProductPickerSheet> {
-  final TextEditingController _search = TextEditingController();
-  List<Map<String, dynamic>> _items = const [];
-  bool _loading = false;
-  Timer? _debounce;
-
-  @override
-  void initState() {
-    super.initState();
-    _search.addListener(_schedule);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load(''));
-  }
-
-  void _schedule() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 300), () => _load(_search.text));
-  }
-
-  Future<void> _load(String q) async {
-    setState(() => _loading = true);
-    try {
-      final qp = <String, String>{'warehouse': widget.warehouseId.toString()};
-      if (q.trim().isNotEmpty) qp['search'] = q.trim();
-      if (widget.outletId != null) qp['outlet'] = widget.outletId.toString();
-      final path = 'inventory/products/?${Uri(queryParameters: qp).query}';
-      final res = await widget.api.get(path);
-      if (!mounted) return;
-      if (res.statusCode == 200) {
-        final d = jsonDecode(res.body);
-        final list = d is List ? d : (d is Map ? (d['results'] ?? d['data']) : null);
-        final items = (list is List) ? list.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
-        setState(() => _items = items);
-      } else {
-        setState(() => _items = const []);
-      }
-    } catch (_) {
-      if (mounted) setState(() => _items = const []);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    _search.dispose();
-    super.dispose();
-  }
+class _Pager extends StatelessWidget {
+  const _Pager({required this.page, required this.total, required this.onPrev, required this.onNext});
+  final int page;
+  final int total;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: dark ? const Color(0xFF0B1220) : Colors.white,
-        borderRadius: AppShape.sheetTop,
-      ),
-      padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: SizedBox(
-        height: MediaQuery.of(context).size.height * 0.72,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Поиск товара', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: cs.onSurface)),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _search,
-              autofocus: true,
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search_rounded),
-                hintText: 'Название, модель, артикул…',
-                suffixIcon: _loading
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-                      )
-                    : null,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: _items.isEmpty && !_loading
-                  ? Center(child: Text('Нет данных', style: TextStyle(color: cs.onSurfaceVariant)))
-                  : ListView.builder(
-                      itemCount: _items.length,
-                      itemBuilder: (_, i) {
-                        final p = _items[i];
-                        final unit = (p['unit'] ?? 'pcs').toString();
-                        final ul = _unitShort(unit);
-                        final isOutlet = widget.outletId != null;
-                        final availRaw = isOutlet ? p['outlet_stock_quantity'] : p['quantity'];
-                        final avail = _asDouble(availRaw);
-                        final availText = avail != null ? 'Ост: $avail $ul' : 'Ед: $ul';
-                        return ListTile(
-                          title: Text(_productLineLabel(p), maxLines: 2, overflow: TextOverflow.ellipsis),
-                          subtitle: Text(availText, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-                          onTap: () => widget.onPick(p),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          IconButton(visualDensity: VisualDensity.compact, onPressed: onPrev, icon: const Icon(Icons.chevron_left_rounded, size: 20)),
+          Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: AppBrand.primaryBlue, borderRadius: BorderRadius.circular(999)),
+            child: Text('$page', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+          ),
+          IconButton(visualDensity: VisualDensity.compact, onPressed: onNext, icon: const Icon(Icons.chevron_right_rounded, size: 20)),
+        ],
       ),
     );
   }

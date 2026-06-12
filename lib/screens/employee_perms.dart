@@ -30,6 +30,17 @@ const permActions = <MapEntry<String, String>>[
   MapEntry('delete', 'Удалить'),
 ];
 
+int countActivePermSections(Map<String, dynamic>? perms) {
+  if (perms == null || perms.isEmpty) return 0;
+  var n = 0;
+  for (final v in perms.values) {
+    if (v is Map && (v['view'] == true || v['create'] == true || v['edit'] == true || v['delete'] == true)) {
+      n++;
+    }
+  }
+  return n;
+}
+
 Map<String, dynamic> _normalizePerms(dynamic raw) {
   if (raw is Map<String, dynamic>) return raw;
   if (raw is Map) return raw.map((k, v) => MapEntry(k.toString(), v));
