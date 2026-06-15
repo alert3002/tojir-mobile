@@ -108,6 +108,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool editingWarehouse = false;
   bool warehouseSaving = false;
   bool warehouseDeleting = false;
+  bool accountDeleting = false;
   final TextEditingController warehouseNameCtrl = TextEditingController();
   final TextEditingController warehouseAddressCtrl = TextEditingController();
 
@@ -333,6 +334,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _deleteAccount() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить аккаунт?'),
+        content: const Text(
+          'Действие необратимо. Вы выйдете из системы, а доступ к аккаунту будет отключён.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Удалить аккаунт'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => accountDeleting = true);
+    try {
+      final res = await context.read<ApiClient>().delete('me/');
+      if (!mounted) return;
+      final data = _tryJsonMap(res.body);
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception(data['detail']?.toString() ?? 'Не удалось удалить аккаунт');
+      }
+      _snack((data['detail'] ?? 'Аккаунт удалён').toString());
+      if (!context.mounted) return;
+      await context.read<SessionController>().logout();
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (e) {
+      _snack(e.toString().replaceFirst('Exception: ', ''), error: true);
+    } finally {
+      if (mounted) setState(() => accountDeleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final u = context.watch<SessionController>().user;
@@ -512,6 +553,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         onPressed: () => Navigator.of(context).pushNamed('/privacy'),
                         icon: const Icon(Icons.policy_outlined, size: 18),
                         label: const Text('Политика конфиденциальности'),
+                      ),
+                      const SizedBox(height: 16),
+                      const Divider(height: 1),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Удаление аккаунта отключает доступ и отвязывает номер телефона. Действие необратимо.',
+                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
+                      ),
+                      const SizedBox(height: 10),
+                      FilledButton.icon(
+                        onPressed: accountDeleting ? null : _deleteAccount,
+                        style: FilledButton.styleFrom(backgroundColor: cs.error),
+                        icon: accountDeleting
+                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.delete_forever_outlined, size: 18),
+                        label: const Text('Удалить аккаунт'),
                       ),
                     ],
                   ),
