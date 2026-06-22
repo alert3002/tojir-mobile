@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
 import '../utils/permissions.dart';
+import '../utils/platform_info.dart';
 import '../widgets/app_scaffold.dart';
 
 const _cardBg = Color(0xFF1E293B);
@@ -331,7 +332,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
                     Navigator.pop(ctx);
                     Navigator.of(context).pushNamed('/profile');
                   },
-                  child: const Text('Пополнить баланс'),
+                  child: Text(isIosApp ? 'Как пополнить' : 'Пополнить баланс'),
                 ),
               ],
             ),

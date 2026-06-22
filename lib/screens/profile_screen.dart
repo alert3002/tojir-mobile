@@ -9,7 +9,9 @@ import '../auth/session_controller.dart';
 import '../services/api_client.dart';
 import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
+import '../utils/platform_info.dart';
 import '../widgets/app_scaffold.dart';
+import '../widgets/ios_manual_topup_sheet.dart';
 import '../widgets/skeleton_loading.dart';
 
 double? _asDouble(dynamic v) {
@@ -221,6 +223,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final amount = double.tryParse(topupAmountCtrl.text.replaceAll(',', '.'));
     if (amount == null || amount < 2) {
       _snack('Минимальная сумма — 2 сомони', error: true);
+      return;
+    }
+    if (isIosApp) {
+      _snack('Оплатите через банк и отправьте чек в Telegram или WhatsApp');
       return;
     }
     setState(() => topupLoading = true);
@@ -774,6 +780,13 @@ else if (clientDebts.isEmpty)
   }
 
   Widget _topupSheet(BuildContext context, double balance) {
+    if (isIosApp) {
+      return IosManualTopupSheet(
+        amountController: topupAmountCtrl,
+        currentBalance: balance,
+        onClose: () => setState(() => topupOpen = false),
+      );
+    }
     final cs = Theme.of(context).colorScheme;
     return Card(
       child: Padding(
