@@ -97,21 +97,26 @@ class _BankIconsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return const Row(
       children: [
-        Expanded(child: _BankTile(asset: 'assets/payments/alif.svg', label: 'Alif Mobi')),
+        Expanded(child: _BankTile(asset: 'assets/payments/alif.png', label: 'Alif Mobi')),
         SizedBox(width: 8),
-        Expanded(child: _BankTile(asset: 'assets/payments/eskhata.svg', label: 'Эсхата')),
+        Expanded(child: _BankTile(asset: 'assets/payments/eskhata.png', label: 'Эсхата')),
         SizedBox(width: 8),
-        Expanded(child: _BankTile(asset: 'assets/payments/dc.svg', label: 'Dushanbe City')),
+        Expanded(child: _BankTile(asset: 'assets/payments/dc.png', label: 'Dushanbe City', wide: true)),
       ],
     );
   }
 }
 
 class _BankTile extends StatelessWidget {
-  const _BankTile({required this.asset, required this.label});
+  const _BankTile({
+    required this.asset,
+    required this.label,
+    this.wide = false,
+  });
 
   final String asset;
   final String label;
+  final bool wide;
 
   @override
   Widget build(BuildContext context) {
@@ -119,10 +124,22 @@ class _BankTile extends StatelessWidget {
     return Column(
       children: [
         AspectRatio(
-          aspectRatio: 1,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(14),
-            child: SvgPicture.asset(asset, fit: BoxFit.cover),
+          aspectRatio: wide ? 1.45 : 1,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              color: wide ? Colors.white : null,
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6, offset: const Offset(0, 2)),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.asset(
+                asset,
+                fit: wide ? BoxFit.contain : BoxFit.cover,
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 5),
