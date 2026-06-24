@@ -11,7 +11,7 @@ import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
 import '../utils/platform_info.dart';
 import '../widgets/app_scaffold.dart';
-import '../widgets/ios_manual_topup_sheet.dart';
+import '../widgets/ios_balance_topup_info.dart';
 import '../widgets/skeleton_loading.dart';
 
 double? _asDouble(dynamic v) {
@@ -436,28 +436,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ],
                         _kv('Баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true),
                         const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: [
-                            FilledButton.icon(
-                              onPressed: () => setState(() => topupOpen = true),
-                              icon: const Icon(Icons.add, size: 18),
-                              label: const Text('Пополнить баланс'),
-                              style: FilledButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                                shape: AppShape.roundedRect,
+                        if (isIosApp) ...[
+                          const IosBalanceTopupInstructions(),
+                          const SizedBox(height: 10),
+                          OutlinedButton.icon(
+                            onPressed: () => setState(() => withdrawOpen = true),
+                            icon: const Icon(Icons.remove, size: 18),
+                            label: const Text('Запросить вывод'),
+                          ),
+                        ] else
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              FilledButton.icon(
+                                onPressed: () => setState(() => topupOpen = true),
+                                icon: const Icon(Icons.add, size: 18),
+                                label: const Text('Пополнить баланс'),
+                                style: FilledButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                                  shape: AppShape.roundedRect,
+                                ),
                               ),
-                            ),
-                            OutlinedButton.icon(
-                              onPressed: () => setState(() => withdrawOpen = true),
-                              icon: const Icon(Icons.remove, size: 18),
-                              label: const Text('Запросить вывод'),
-                            ),
-                          ],
-                        ),
+                              OutlinedButton.icon(
+                                onPressed: () => setState(() => withdrawOpen = true),
+                                icon: const Icon(Icons.remove, size: 18),
+                                label: const Text('Запросить вывод'),
+                              ),
+                            ],
+                          ),
                         const SizedBox(height: 12),
                         FilledButton.icon(
                           onPressed: () => setState(() => editing = true),
@@ -728,7 +737,7 @@ else if (clientDebts.isEmpty)
                 ),
               ],
               const SizedBox(height: 12),
-              if (topupOpen) _topupSheet(context, balance),
+              if (topupOpen && !isIosApp) _topupSheet(context, balance),
               if (withdrawOpen) _withdrawSheet(context, balance),
             ],
           ),
@@ -780,13 +789,6 @@ else if (clientDebts.isEmpty)
   }
 
   Widget _topupSheet(BuildContext context, double balance) {
-    if (isIosApp) {
-      return IosManualTopupSheet(
-        amountController: topupAmountCtrl,
-        currentBalance: balance,
-        onClose: () => setState(() => topupOpen = false),
-      );
-    }
     final cs = Theme.of(context).colorScheme;
     return Card(
       child: Padding(
