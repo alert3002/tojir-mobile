@@ -5,15 +5,17 @@ import 'permissions.dart';
 class BottomNavItem {
   const BottomNavItem({
     required this.label,
-    required this.icon,
+    this.icon,
     required this.route,
     this.sectionKey,
-  });
+    this.isSupport = false,
+  }) : assert(isSupport || icon != null);
 
   final String label;
-  final IconData icon;
+  final IconData? icon;
   final String? route;
   final String? sectionKey;
+  final bool isSupport;
 }
 
 bool _subscriptionLocked(Map<String, dynamic>? user) {
@@ -39,6 +41,7 @@ const _sellerBottom = [
   BottomNavItem(label: 'Продажа', icon: Icons.shopping_cart_outlined, route: '/sales', sectionKey: 'sales'),
   BottomNavItem(label: 'Склад', icon: Icons.inventory_2_outlined, route: '/warehouse', sectionKey: 'warehouse'),
   BottomNavItem(label: 'История', icon: Icons.history_rounded, route: '/history', sectionKey: 'history'),
+  BottomNavItem(label: 'Техподдержка', route: '/support', isSupport: true),
   BottomNavItem(label: 'Профиль', icon: Icons.person_rounded, route: '/profile'),
 ];
 
@@ -47,6 +50,7 @@ const _businessmanBottom = [
   BottomNavItem(label: 'Продажа', icon: Icons.shopping_cart_outlined, route: '/sales', sectionKey: 'sales'),
   BottomNavItem(label: 'Отчёт', icon: Icons.pie_chart_outline_rounded, route: '/reports', sectionKey: 'reports'),
   BottomNavItem(label: 'История', icon: Icons.history_rounded, route: '/history', sectionKey: 'history'),
+  BottomNavItem(label: 'Техподдержка', route: '/support', isSupport: true),
   BottomNavItem(label: 'Профиль', icon: Icons.person_rounded, route: '/profile'),
 ];
 
@@ -55,6 +59,7 @@ const _clientBottom = [
   BottomNavItem(label: 'Долги', icon: Icons.account_balance_outlined, route: '/debts', sectionKey: 'debts'),
   BottomNavItem(label: 'История', icon: Icons.history_rounded, route: '/history', sectionKey: 'history'),
   BottomNavItem(label: 'Реферал', icon: Icons.group_add_outlined, route: '/referral', sectionKey: 'referral'),
+  BottomNavItem(label: 'Техподдержка', route: '/support', isSupport: true),
   BottomNavItem(label: 'Профиль', icon: Icons.person_rounded, route: '/profile'),
 ];
 
@@ -63,6 +68,7 @@ const _nasiyaBottom = [
   BottomNavItem(label: 'Продажа', icon: Icons.shopping_cart_outlined, route: '/sales', sectionKey: 'sales'),
   BottomNavItem(label: 'Долги', icon: Icons.account_balance_outlined, route: '/debts', sectionKey: 'debts'),
   BottomNavItem(label: 'История', icon: Icons.history_rounded, route: '/history', sectionKey: 'history'),
+  BottomNavItem(label: 'Техподдержка', route: '/support', isSupport: true),
   BottomNavItem(label: 'Профиль', icon: Icons.person_rounded, route: '/profile'),
 ];
 
@@ -71,6 +77,7 @@ List<BottomNavItem> getBottomNavItems(Map<String, dynamic>? user) {
 
   if ((user['role'] as String?) == 'businessman' && !businessmanHasWarehouse(user)) {
     return const [
+      BottomNavItem(label: 'Техподдержка', route: '/support', isSupport: true),
       BottomNavItem(label: 'Профиль', icon: Icons.person_rounded, route: '/profile'),
     ];
   }
@@ -92,10 +99,13 @@ List<BottomNavItem> getBottomNavItems(Map<String, dynamic>? user) {
 bool bottomNavItemLocked(Map<String, dynamic>? user, BottomNavItem item) {
   if (user == null) return false;
   if ((user['role'] as String?) == 'businessman' && !businessmanHasWarehouse(user)) {
-    return item.route != '/profile';
+    return item.route != '/profile' && item.route != '/support';
   }
   if (_subscriptionLocked(user)) {
-    return item.route != '/profile' && item.route != null && item.route != '/tariffs';
+    return item.route != '/profile' &&
+        item.route != '/tariffs' &&
+        item.route != '/support' &&
+        item.route != null;
   }
   return false;
 }

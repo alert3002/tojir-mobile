@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/services.dart';
 
+import '../config/payment_config.dart';
 import '../widgets/app_scaffold.dart';
+import '../widgets/support_contact.dart';
 
 const _cardBg = Color(0xFF151D2E);
 const _blue = Color(0xFF2563EB);
@@ -9,15 +11,10 @@ const _blue = Color(0xFF2563EB);
 class SupportScreen extends StatelessWidget {
   const SupportScreen({super.key});
 
-  Future<void> _open(Uri uri) async {
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return AppScaffold(
       child: SafeArea(
         top: false,
@@ -27,50 +24,67 @@ class SupportScreen extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: _cardBg,
+                color: dark ? _cardBg : cs.surfaceContainerLow,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                border: Border.all(color: cs.outlineVariant.withValues(alpha: dark ? 0.2 : 0.35)),
               ),
               child: Column(
                 children: [
-                  Container(
-                    width: 56,
-                    height: 56,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: _blue.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(Icons.support_agent_rounded, size: 30, color: _blue),
-                  ),
+                  const SupportMessengerIcons(size: 28, gap: 10, active: true),
                   const SizedBox(height: 14),
-                  Text('Служба поддержки', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
+                  Text(
+                    'Техподдержка',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface),
+                  ),
                   const SizedBox(height: 6),
                   Text(
-                    'Мы на связи 24/7, чтобы помочь вам с управлением вашим бизнесом.',
+                    'Напишите в Telegram или WhatsApp — ответим по вопросам Tojir.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
                   ),
-                  const SizedBox(height: 20),
-                  _SupportMethod(
-                    icon: Icons.send_rounded,
-                    title: 'Написать в Telegram',
-                    subtitle: '@tojir_support',
-                    onTap: () => _open(Uri.parse('https://t.me/tojir_support')),
+                  const SizedBox(height: 18),
+                  Material(
+                    color: _blue.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    child: InkWell(
+                      onTap: () => Clipboard.setData(
+                        const ClipboardData(text: PaymentConfig.supportPhone),
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.phone_in_talk_rounded, color: _blue, size: 22),
+                            const SizedBox(width: 10),
+                            Text(
+                              PaymentConfig.supportPhone,
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.5,
+                                color: cs.onSurface,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Нажмите, чтобы скопировать номер',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 18),
+                  const SupportMessengerButtons(),
                   const SizedBox(height: 10),
                   _SupportMethod(
                     icon: Icons.phone_outlined,
-                    title: '+992 (00) 000-00-00',
-                    subtitle: 'Звонок',
-                    onTap: () => _open(Uri.parse('tel:+992000000000')),
-                  ),
-                  const SizedBox(height: 10),
-                  _SupportMethod(
-                    icon: Icons.mail_outline_rounded,
-                    title: 'support@tojir.tj',
-                    subtitle: 'Почта',
-                    onTap: () => _open(Uri.parse('mailto:support@tojir.tj')),
+                    title: 'Позвонить',
+                    subtitle: '+${PaymentConfig.supportPhoneIntl}',
+                    onTap: SupportContact.callPhone,
                   ),
                   const SizedBox(height: 16),
                   Container(
@@ -106,12 +120,6 @@ class SupportScreen extends StatelessWidget {
                     style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 44)),
                     child: const Text('Политика'),
                   ),
-                  const SizedBox(height: 10),
-                  OutlinedButton(
-                    onPressed: () => _open(Uri.parse('mailto:support@tojir.tj')),
-                    style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 44)),
-                    child: const Text('Написать письмо'),
-                  ),
                 ],
               ),
             ),
@@ -124,6 +132,7 @@ class SupportScreen extends StatelessWidget {
 
 class _SupportMethod extends StatelessWidget {
   const _SupportMethod({required this.icon, required this.title, required this.subtitle, required this.onTap});
+
   final IconData icon;
   final String title;
   final String subtitle;
@@ -133,7 +142,7 @@ class _SupportMethod extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Material(
-      color: Colors.black.withValues(alpha: 0.2),
+      color: Colors.black.withValues(alpha: 0.06),
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         onTap: onTap,

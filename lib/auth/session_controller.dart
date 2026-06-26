@@ -14,9 +14,12 @@ class SessionController extends ChangeNotifier {
   final AuthStorage _storage;
   final ApiClient _api;
 
+  static const _keepAliveInterval = Duration(hours: 3);
+
   Map<String, dynamic>? _user;
   bool _ready = false;
   String? _bootstrapError;
+  Timer? _keepAliveTimer;
 
   Map<String, dynamic>? get user => _user;
   bool get isReady => _ready;
@@ -34,6 +37,25 @@ class SessionController extends ChangeNotifier {
   }
 
   String? get role => _user?['role'] as String?;
+
+  void _startKeepAlive() {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = Timer.periodic(_keepAliveInterval, (_) {
+      if (_user == null) return;
+      unawaited(_api.refreshSession());
+    });
+  }
+
+  void _stopKeepAlive() {
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+  }
+
+  @override
+  void dispose() {
+    _stopKeepAlive();
+    super.dispose();
+  }
 
   /// Загрузка профиля при старте (если есть access token).
   Future<void> bootstrap() async {
@@ -58,27 +80,67 @@ class SessionController extends ChangeNotifier {
       }
     }
 
+    await _api.refreshSession();
+
     try {
-      final res = await _api.get('me/');
-      if (res.statusCode == 200) {
-        _user = jsonDecode(res.body) as Map<String, dynamic>;
-        await _storage.setUserJson(res.body);
-      } else if (res.statusCode == 401) {
-        await _storage.clear();
-        _user = null;
+      final ok = await _reloadProfileFromServer(clearOnUnauthorized: true);
+      if (!ok && _user == null) {
         _bootstrapError = null;
-      } else {
-        _bootstrapError = 'Профиль: ${res.statusCode}';
+      } else if (!ok && _user != null) {
+        _bootstrapError = 'Нет связи с сервером. Проверьте интернет.';
       }
     } catch (e) {
-      _bootstrapError = e.toString();
+      if (_user == null) {
+        _bootstrapError = e.toString();
+      }
     }
 
     _ready = true;
     notifyListeners();
     if (_user != null) {
+      _startKeepAlive();
       unawaited(PushService.instance.syncAfterLogin(_api));
+    } else {
+      _stopKeepAlive();
     }
+  }
+
+  /// После возврата из фона: обновить JWT (мӯҳлат +14 рӯз) бе logout.
+  Future<void> resumeFromBackground() async {
+    if (_user == null) return;
+    await _api.refreshSession();
+    try {
+      await _reloadProfileFromServer(clearOnUnauthorized: false);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<bool> _reloadProfileFromServer({required bool clearOnUnauthorized}) async {
+    var res = await _api.get('me/');
+    if (res.statusCode == 401) {
+      final refreshed = await _api.refreshSession();
+      if (refreshed) {
+        res = await _api.get('me/');
+      }
+    }
+    if (res.statusCode == 200) {
+      _user = jsonDecode(res.body) as Map<String, dynamic>;
+      await _storage.setUserJson(res.body);
+      _bootstrapError = null;
+      return true;
+    }
+    if (res.statusCode == 401 && clearOnUnauthorized) {
+      _stopKeepAlive();
+      await _storage.clear();
+      _user = null;
+      _bootstrapError = null;
+      return false;
+    }
+    if (res.statusCode == 401) {
+      return false;
+    }
+    _bootstrapError = 'Профиль: ${res.statusCode}';
+    return false;
   }
 
   Future<({bool isNewUser, String? debugCode})> requestSmsCode(
@@ -146,6 +208,7 @@ class SessionController extends ChangeNotifier {
     await _storage.setTokens(access: access, refresh: refresh);
     _user = u;
     await _storage.setUserJson(jsonEncode(u));
+    _startKeepAlive();
     notifyListeners();
     unawaited(PushService.instance.syncAfterLogin(_api));
   }
@@ -178,6 +241,7 @@ class SessionController extends ChangeNotifier {
     }
     _user = jsonDecode(me.body) as Map<String, dynamic>;
     await _storage.setUserJson(me.body);
+    _startKeepAlive();
     notifyListeners();
     unawaited(PushService.instance.syncAfterLogin(_api));
   }
@@ -197,6 +261,7 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    _stopKeepAlive();
     await PushService.instance.unregisterFromServer(_api);
     await _storage.clear();
     _user = null;

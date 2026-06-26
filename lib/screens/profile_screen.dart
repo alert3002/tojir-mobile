@@ -232,7 +232,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => topupLoading = true);
     final api = context.read<ApiClient>();
     try {
-      final res = await api.post('me/balance/topup/', body: {'amount': amount, 'return_url': ''});
+      final res = await api.post(
+        'me/balance/topup/',
+        body: {
+          'amount': amount,
+          'return_url': 'https://api.tojir.tj/payment/return/',
+          'provider': 'alif',
+        },
+      );
       if (!mounted) return;
       final data = _tryJsonMap(res.body);
       if (res.statusCode != 200 && res.statusCode != 201) throw Exception((data['detail'] ?? 'Ошибка создания платежа').toString());
@@ -243,7 +250,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!ok) throw Exception('Не удалось открыть ссылку оплаты');
       setState(() => topupOpen = false);
-      _snack('Откройте оплату в браузере и вернитесь в приложение');
+      _snack('Откройте оплату Alif в браузере и вернитесь в приложение');
     } catch (e) {
       _snack(e.toString(), error: true);
     } finally {
@@ -437,6 +444,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         _kv('Баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true),
                         const SizedBox(height: 10),
                         if (isIosApp) ...[
+                          FilledButton.icon(
+                            onPressed: () => Navigator.of(context).pushNamed('/tariffs'),
+                            icon: const Icon(Icons.apple, size: 18),
+                            label: const Text('Подписка через App Store'),
+                          ),
+                          const SizedBox(height: 10),
                           const IosBalanceTopupInstructions(),
                           const SizedBox(height: 10),
                           OutlinedButton.icon(
@@ -797,6 +810,11 @@ else if (clientDebts.isEmpty)
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text('Пополнить баланс', style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 6),
+            Text(
+              'Онлайн-оплата через Alif: Korti Milli, Visa, Mastercard, Alif Mobi, Google Pay, операторы.',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
+            ),
             const SizedBox(height: 8),
             TextField(
               controller: topupAmountCtrl,
@@ -812,7 +830,7 @@ else if (clientDebts.isEmpty)
                   onPressed: topupLoading ? null : _topup,
                   child: topupLoading
                       ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Перейти к оплате'),
+                      : const Text('Оплатить через Alif'),
                 ),
                 TextButton(onPressed: topupLoading ? null : () => setState(() => topupOpen = false), child: const Text('Отмена')),
               ],

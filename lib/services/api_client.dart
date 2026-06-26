@@ -1,14 +1,18 @@
 import 'dart:convert';
+
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
 import '../config/app_config.dart';
 import 'auth_storage.dart';
+import 'dio_http_setup.dart';
 
-/// HTTP-клиент переписан на Dio для Interceptors, но для обратной совместимости возвращает http.Response.
-/// Постепенно (incremental) вы можете менять экраны, чтобы использовать Dio напрямую.
+/// HTTP-клиент на Dio. При 401 автоматически обновляет access token через refresh.
 class ApiClient {
   late final Dio _dio;
   final AuthStorage _storage;
+  Future<String?>? _refreshInFlight;
 
   String _cleanUrl(String path) {
     final b = AppConfig.apiBase.replaceAll(RegExp(r'/+$'), '');
@@ -16,12 +20,36 @@ class ApiClient {
     return '$b/$p';
   }
 
+  bool _isAuthPath(String path) {
+    final p = path.toLowerCase();
+    return p.contains('auth/request-sms') ||
+        p.contains('auth/verify-sms') ||
+        p.contains('auth/jwt/token/refresh') ||
+        p.contains('auth/jwt/token/');
+  }
+
+  bool _isTransientNetworkError(DioException e) {
+    if (e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.sendTimeout ||
+        e.type == DioExceptionType.receiveTimeout ||
+        e.type == DioExceptionType.connectionError) {
+      return true;
+    }
+    return isSocketLikeError(e.error);
+  }
+
   ApiClient(this._storage) {
     _dio = Dio(BaseOptions(
-      // We don't use baseUrl here to ensure absolute path string concatenation isn't mangled by Dio
       responseType: ResponseType.plain,
-      validateStatus: (status) => status != null && status < 500, // Handle errors gracefully
+      connectTimeout: const Duration(seconds: 20),
+      receiveTimeout: const Duration(seconds: 45),
+      // 4xx обрабатываем в экранах; 5xx — как ошибка сети.
+      validateStatus: (status) => status != null && status < 500,
     ));
+
+    if (!kIsWeb) {
+      configureDioHttpClient(_dio);
+    }
 
     _dio.interceptors.add(
       InterceptorsWrapper(
@@ -31,35 +59,38 @@ class ApiClient {
             options.headers['Authorization'] = 'Bearer $t';
           }
           options.headers['Content-Type'] = 'application/json';
+          options.headers['Connection'] = 'close';
           return handler.next(options);
         },
+        onResponse: (response, handler) async {
+          final retried = await _retryIfUnauthorized(response.requestOptions, response.statusCode);
+          if (retried != null) {
+            return handler.resolve(retried);
+          }
+          return handler.next(response);
+        },
         onError: (DioException e, handler) async {
-          if (e.response?.statusCode == 401) {
-            final refresh = await _storage.refreshToken;
-            if (refresh != null && refresh.isNotEmpty) {
-              try {
-                final refreshOptions = Options(headers: {'Content-Type': 'application/json'});
-                final b = AppConfig.apiBase.replaceAll(RegExp(r'/+$'), '');
-                final res = await Dio().post(
-                  '$b/auth/jwt/token/refresh/',
-                  options: refreshOptions,
-                  data: jsonEncode({'refresh': refresh}),
-                );
-                
-                if (res.statusCode == 200) {
-                  final data = res.data is String ? jsonDecode(res.data) : res.data;
-                  final access = data['access'] as String;
-                  final nextRefresh = data['refresh'] as String?;
-                  await _storage.setTokens(access: access, refresh: nextRefresh);
-                  
-                  e.requestOptions.headers['Authorization'] = 'Bearer $access';
-                  final retryRes = await Dio().fetch(e.requestOptions);
-                  return handler.resolve(retryRes);
-                }
-              } catch (_) {
-                // If refresh fails, just let 401 pass
+          if (_isTransientNetworkError(e) && e.requestOptions.extra['conn_retry'] != true) {
+            final opts = e.requestOptions.copyWith(
+              extra: Map<String, dynamic>.from(e.requestOptions.extra)
+                ..['conn_retry'] = true,
+            );
+            try {
+              final response = await _dio.fetch(opts);
+              return handler.resolve(response);
+            } catch (retryErr) {
+              if (retryErr is DioException) {
+                e = retryErr;
+              } else {
+                return handler.next(e);
               }
             }
+          }
+
+          final status = e.response?.statusCode;
+          final retried = await _retryIfUnauthorized(e.requestOptions, status);
+          if (retried != null) {
+            return handler.resolve(retried);
           }
           return handler.next(e);
         },
@@ -67,8 +98,80 @@ class ApiClient {
     );
   }
 
+  Future<Response<dynamic>?> _retryIfUnauthorized(
+    RequestOptions requestOptions,
+    int? statusCode,
+  ) async {
+    if (statusCode != 401) return null;
+    if (_isAuthPath(requestOptions.uri.path)) return null;
+    if (requestOptions.extra['retried_after_refresh'] == true) return null;
+
+    final access = await _refreshAccessToken();
+    if (access == null || access.isEmpty) return null;
+
+    final opts = requestOptions.copyWith(
+      headers: Map<String, dynamic>.from(requestOptions.headers)
+        ..['Authorization'] = 'Bearer $access',
+      extra: Map<String, dynamic>.from(requestOptions.extra)
+        ..['retried_after_refresh'] = true,
+    );
+    try {
+      return await _dio.fetch(opts);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _refreshAccessToken() async {
+    if (_refreshInFlight != null) {
+      return _refreshInFlight!;
+    }
+    _refreshInFlight = _doRefreshAccessToken();
+    try {
+      return await _refreshInFlight!;
+    } finally {
+      _refreshInFlight = null;
+    }
+  }
+
+  Future<String?> _doRefreshAccessToken() async {
+    final refresh = await _storage.refreshToken;
+    if (refresh == null || refresh.isEmpty) return null;
+
+    try {
+      final b = AppConfig.apiBase.replaceAll(RegExp(r'/+$'), '');
+      final res = await Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(seconds: 30),
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      ).post(
+        '$b/auth/jwt/token/refresh/',
+        options: Options(headers: {'Content-Type': 'application/json', 'Connection': 'close'}),
+        data: jsonEncode({'refresh': refresh}),
+      );
+      if (res.statusCode != 200) return null;
+
+      final data = res.data is String ? jsonDecode(res.data as String) : res.data;
+      if (data is! Map) return null;
+      final access = data['access'] as String?;
+      if (access == null || access.isEmpty) return null;
+
+      final nextRefresh = data['refresh'] as String?;
+      if (nextRefresh != null && nextRefresh.isNotEmpty) {
+        await _storage.setTokens(access: access, refresh: nextRefresh);
+      } else {
+        await _storage.setTokens(access: access, refresh: refresh);
+      }
+      return access;
+    } catch (_) {
+      return null;
+    }
+  }
+
   http.Response _toHttpResponse(Response<dynamic> res) {
-    var bodyStr = res.data?.toString() ?? '';
+    final bodyStr = res.data?.toString() ?? '';
     final headers = <String, String>{};
     res.headers.map.forEach((k, v) => headers[k] = v.join(','));
     return http.Response(bodyStr, res.statusCode ?? 500, headers: headers);
@@ -100,5 +203,11 @@ class ApiClient {
   Future<http.Response> delete(String path, {bool withAuth = true}) async {
     final res = await _dio.delete(_cleanUrl(path));
     return _toHttpResponse(res);
+  }
+
+  /// Обновить access token (при старте и после возврата из фона).
+  Future<bool> refreshSession() async {
+    final access = await _refreshAccessToken();
+    return access != null && access.isNotEmpty;
   }
 }

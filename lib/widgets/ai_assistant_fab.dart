@@ -124,7 +124,7 @@ class _AiChatSheetState extends State<_AiChatSheet> {
       );
       if (!mounted) return;
       final data = jsonDecode(res.body.isEmpty ? '{}' : res.body);
-      final reply = (data is Map ? (data['reply'] ?? data['text'] ?? data['detail']) : null)?.toString() ??
+      final reply = (data is Map ? (data['answer'] ?? data['reply'] ?? data['text'] ?? data['detail']) : null)?.toString() ??
           (res.statusCode == 200 ? 'Готово.' : 'Ошибка ${res.statusCode}');
       setState(() => _messages.add({'role': 'assistant', 'text': reply}));
     } catch (e) {

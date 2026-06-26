@@ -38,6 +38,7 @@ dependencies:
   provider: ^6.1.2
   flutter_riverpod: ^2.4.9
   url_launcher: ^6.3.1
+  in_app_purchase: ^3.2.3
   google_fonts: ^6.2.1
   flutter_svg: ^2.2.4
   permission_handler: ^11.4.0

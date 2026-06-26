@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
+import '../services/iap_service.dart';
 import '../utils/permissions.dart';
 import '../utils/platform_info.dart';
 import '../widgets/app_scaffold.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 
 const _cardBg = Color(0xFF1E293B);
 const _blue = Color(0xFF2563EB);
@@ -59,6 +61,12 @@ class _TariffsScreenState extends State<TariffsScreen> {
 
   int vipProducts = 2000;
   int vipStores = 5;
+  Map<String, ProductDetails> iapProducts = const {};
+
+  String? _appleProductId(Map<String, dynamic> t) {
+    final id = (t['apple_product_id'] ?? '').toString().trim();
+    return id.isEmpty ? null : id;
+  }
 
   @override
   void initState() {
@@ -66,8 +74,23 @@ class _TariffsScreenState extends State<TariffsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _load();
       if (!mounted) return;
+      if (isIosApp) {
+        await _loadIapProducts();
+      }
+      if (!mounted) return;
       await context.read<SessionController>().bootstrap();
     });
+  }
+
+  Future<void> _loadIapProducts() async {
+    try {
+      final ids = await IapService.instance.productIdsFromApi();
+      if (ids.isEmpty || !mounted) return;
+      final products = await IapService.instance.loadProducts(ids);
+      if (mounted) setState(() => iapProducts = products);
+    } catch (e) {
+      if (mounted) _snack('App Store: $e', warning: true);
+    }
   }
 
   @override
@@ -274,31 +297,84 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 const SizedBox(height: 8),
                 Text('Лимиты: до ${t['max_products'] ?? '∞'} товаров, ${t['max_stores']} магазин(ов).'),
                 const SizedBox(height: 8),
-                Text('Срок подписки продлится на ${t['duration_days']} дней от текущей даты окончания.'),
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: _priceGreen.withValues(alpha: 0.35)),
-                    color: _priceGreen.withValues(alpha: 0.08),
-                  ),
-                  child: Text('С баланса спишется: $priceLabel', style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(
+                  isIosApp
+                      ? 'Оплата через App Store (Apple).'
+                      : 'Срок подписки продлится на ${t['duration_days']} дней от текущей даты окончания.',
                 ),
+                if (!isIosApp) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _priceGreen.withValues(alpha: 0.35)),
+                      color: _priceGreen.withValues(alpha: 0.08),
+                    ),
+                    child: Text('С баланса спишется: $priceLabel', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ],
               ],
             ),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Активировать')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(isIosApp ? 'Купить в App Store' : 'Активировать'),
+            ),
           ],
         ),
       );
       if (ok != true || !mounted) return;
     }
 
+    if (isIosApp) {
+      final productId = _appleProductId(t);
+      if (productId != null) {
+        await _buyTariffViaApple(t, productId, payload: payload);
+        return;
+      }
+      _snack('Для iOS укажите Apple product ID в админке (тариф).', error: true);
+      return;
+    }
+
     await _buyTariff(id, payload: payload);
+  }
+
+  Future<void> _buyTariffViaApple(
+    Map<String, dynamic> t,
+    String productId, {
+    Map<String, dynamic>? payload,
+  }) async {
+    final id = _asInt(t['id']);
+    if (id == null) return;
+    final product = iapProducts[productId];
+    if (product == null) {
+      _snack('Продукт не найден в App Store. Проверьте App Store Connect.', error: true);
+      return;
+    }
+
+    setState(() => buyingId = id);
+    await IapService.instance.purchaseSubscription(
+      product: product,
+      tariffId: id,
+      onSuccess: () async {
+        if (!mounted) return;
+        _snack('Подписка активирована');
+        await _load();
+        if (!mounted) return;
+        await context.read<SessionController>().bootstrap();
+        if (mounted) setState(() => buyingId = null);
+      },
+      onError: (msg) {
+        if (mounted) {
+          _snack(msg, error: true);
+          setState(() => buyingId = null);
+        }
+      },
+    );
   }
 
   Future<void> _buyTariff(int tariffId, {Map<String, dynamic>? payload}) async {
@@ -558,7 +634,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 ),
               ],
             ),
-            if (kind == 'vip') ...[
+            if (kind == 'vip' && !isIosApp) ...[
               const SizedBox(height: 12),
               Divider(color: Colors.white.withValues(alpha: 0.1), height: 1),
               const SizedBox(height: 12),
@@ -588,6 +664,10 @@ class _TariffsScreenState extends State<TariffsScreen> {
               onPressed: (!canBuy || activeNow || buyingId == id)
                   ? null
                   : () {
+                      if (isIosApp) {
+                        _requestActivateTariff(t, user, hasActive);
+                        return;
+                      }
                       if (kind == 'vip') {
                         final calc = _calcVipPrice(t, vipProducts, vipStores);
                         _requestActivateTariff(
@@ -610,7 +690,13 @@ class _TariffsScreenState extends State<TariffsScreen> {
               ),
               child: buyingId == id
                   ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : Text(activeNow ? 'Активен' : 'Активировать'),
+                  : Text(
+                      activeNow
+                          ? 'Активен'
+                          : isIosApp
+                              ? 'App Store'
+                              : 'Активировать',
+                    ),
             ),
           ],
         ),

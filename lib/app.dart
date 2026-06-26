@@ -38,6 +38,9 @@ import 'screens/transfers_screen.dart';
 import 'screens/warehouse_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_storage.dart';
+import 'services/iap_service.dart';
+import 'services/web_tab_resume.dart';
+import 'utils/platform_info.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 import 'utils/permissions.dart';
@@ -150,14 +153,35 @@ class _SessionGate extends StatefulWidget {
   State<_SessionGate> createState() => _SessionGateState();
 }
 
-class _SessionGateState extends State<_SessionGate> {
+class _SessionGateState extends State<_SessionGate> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ThemeController>().load();
       context.read<SessionController>().bootstrap();
+      bindWebTabResume(() {
+        if (!mounted) return;
+        context.read<SessionController>().resumeFromBackground();
+      });
+      if (isIosApp) {
+        IapService.instance.init(context.read<ApiClient>());
+      }
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      context.read<SessionController>().resumeFromBackground();
+    }
   }
 
   @override
