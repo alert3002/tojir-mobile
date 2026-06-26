@@ -68,6 +68,24 @@ class _TariffsScreenState extends State<TariffsScreen> {
     return id.isEmpty ? null : id;
   }
 
+  bool _isPaidTariff(Map<String, dynamic> t) => (_asDouble(t['price_somoni']) ?? 0) > 0;
+
+  String _buyButtonLabel(Map<String, dynamic> t, bool activeNow) {
+    if (activeNow) return 'Активен';
+    if (!isIosApp) return 'Активировать';
+    if (!_isPaidTariff(t)) return 'Активировать';
+    final productId = _appleProductId(t);
+    if (productId == null) return 'Скоро в App Store';
+    final product = iapProducts[productId];
+    return product?.price ?? 'App Store';
+  }
+
+  bool _buyButtonEnabled(Map<String, dynamic> t, bool canBuy, bool activeNow, int id) {
+    if (!canBuy || activeNow || buyingId == id) return false;
+    if (isIosApp && _isPaidTariff(t) && _appleProductId(t) == null) return false;
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -298,9 +316,11 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 Text('Лимиты: до ${t['max_products'] ?? '∞'} товаров, ${t['max_stores']} магазин(ов).'),
                 const SizedBox(height: 8),
                 Text(
-                  isIosApp
+                  isIosApp && _isPaidTariff(t)
                       ? 'Оплата через App Store (Apple).'
-                      : 'Срок подписки продлится на ${t['duration_days']} дней от текущей даты окончания.',
+                      : isIosApp
+                          ? 'Бесплатная активация на сервере Tojir.'
+                          : 'Срок подписки продлится на ${t['duration_days']} дней от текущей даты окончания.',
                 ),
                 if (!isIosApp) ...[
                   const SizedBox(height: 12),
@@ -322,7 +342,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text(isIosApp ? 'Купить в App Store' : 'Активировать'),
+              child: Text(isIosApp && _isPaidTariff(t) ? 'Купить в App Store' : 'Активировать'),
             ),
           ],
         ),
@@ -330,13 +350,17 @@ class _TariffsScreenState extends State<TariffsScreen> {
       if (ok != true || !mounted) return;
     }
 
-    if (isIosApp) {
+    if (isIosApp && _isPaidTariff(t)) {
       final productId = _appleProductId(t);
       if (productId != null) {
         await _buyTariffViaApple(t, productId, payload: payload);
         return;
       }
-      _snack('Для iOS укажите Apple product ID в админке (тариф).', error: true);
+      _snack(
+        'Укажите Apple product ID в админке для «${t['name']}» '
+        '(напр. tj.tojir.tariff.standard.monthly).',
+        error: true,
+      );
       return;
     }
 
@@ -661,14 +685,17 @@ class _TariffsScreenState extends State<TariffsScreen> {
             ],
             const SizedBox(height: 14),
             FilledButton(
-              onPressed: (!canBuy || activeNow || buyingId == id)
-                  ? null
-                  : () {
+              onPressed: _buyButtonEnabled(t, canBuy, activeNow, id)
+                  ? () {
+                      if (isIosApp && _tariffKind(t) == 'vip') {
+                        _snack('VIP в App Store скоро. Пока доступен тариф «Стандарт».', warning: true);
+                        return;
+                      }
                       if (isIosApp) {
                         _requestActivateTariff(t, user, hasActive);
                         return;
                       }
-                      if (kind == 'vip') {
+                      if (_tariffKind(t) == 'vip') {
                         final calc = _calcVipPrice(t, vipProducts, vipStores);
                         _requestActivateTariff(
                           t,
@@ -679,7 +706,8 @@ class _TariffsScreenState extends State<TariffsScreen> {
                         return;
                       }
                       _requestActivateTariff(t, user, hasActive);
-                    },
+                    }
+                  : null,
               style: FilledButton.styleFrom(
                 backgroundColor: activeNow ? const Color(0xFF3A4558) : _blue,
                 disabledBackgroundColor: const Color(0xFF3A4558),
@@ -690,13 +718,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
               ),
               child: buyingId == id
                   ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : Text(
-                      activeNow
-                          ? 'Активен'
-                          : isIosApp
-                              ? 'App Store'
-                              : 'Активировать',
-                    ),
+                  : Text(_buyButtonLabel(t, activeNow)),
             ),
           ],
         ),

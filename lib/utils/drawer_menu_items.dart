@@ -133,6 +133,7 @@ String? drawerSelectedRoute(String? currentRoute) {
     '/history',
     '/referral',
     '/tariffs',
+    '/support',
     '/settings/notifications',
     '/profile',
   ];
@@ -147,7 +148,7 @@ String drawerRedirectRoute(Map<String, dynamic>? user, String route) {
   if ((user?['role'] as String?) == 'businessman' && !businessmanHasWarehouse(user)) {
     return '/profile';
   }
-  if (subscriptionLocked(user) && route != '/tariffs') {
+  if (subscriptionLocked(user) && route != '/tariffs' && route != '/support') {
     return '/tariffs';
   }
   return route;

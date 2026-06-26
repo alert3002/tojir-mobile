@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../config/payment_config.dart';
 import '../theme/app_brand.dart';
 import '../utils/bottom_nav_items.dart';
-import 'support_contact.dart';
 
 /// Нижняя навигация — как web `.tojir-bottom-nav` (плоская, 64px, full width).
 class AppBottomNav extends StatelessWidget {
@@ -15,7 +13,7 @@ class AppBottomNav extends StatelessWidget {
     final r = route ?? '/';
     final idx = items.indexWhere((x) => x.route == r);
     if (idx >= 0) return idx;
-    for (final prefix in ['/warehouse', '/sales', '/history', '/reports', '/debts', '/referral', '/support', '/profile']) {
+    for (final prefix in ['/warehouse', '/sales', '/history', '/reports', '/debts', '/referral', '/profile']) {
       if (r.startsWith(prefix)) {
         final i = items.indexWhere((x) => x.route == prefix);
         if (i >= 0) return i;
@@ -56,99 +54,27 @@ class AppBottomNav extends StatelessWidget {
               children: [
                 for (var i = 0; i < items.length; i++)
                   Expanded(
-                    child: items[i].isSupport
-                        ? _SupportBottomNavItem(
-                            active: i == selected,
-                            locked: bottomNavItemLocked(user, items[i]),
-                            dark: dark,
-                            onTap: () {
-                              if (route == '/support') return;
-                              Navigator.of(context).pushNamedAndRemoveUntil('/support', (r) => r.isFirst);
-                            },
-                          )
-                        : _BottomNavItem(
-                            item: items[i],
-                            active: i == selected,
-                            locked: bottomNavItemLocked(user, items[i]),
-                            dark: dark,
-                            onTap: () {
-                              final item = items[i];
-                              final to = bottomNavItemLocked(user, item)
-                                  ? bottomNavRedirectRoute(user, item)
-                                  : (item.route ?? '/');
-                              if (item.route == null) {
-                                Navigator.of(context).popUntil((r) => r.isFirst);
-                                return;
-                              }
-                              if (to == route) return;
-                              Navigator.of(context).pushNamedAndRemoveUntil(to, (r) => r.isFirst);
-                            },
-                          ),
+                    child: _BottomNavItem(
+                      item: items[i],
+                      active: i == selected,
+                      locked: bottomNavItemLocked(user, items[i]),
+                      dark: dark,
+                      onTap: () {
+                        final item = items[i];
+                        final to = bottomNavItemLocked(user, item)
+                            ? bottomNavRedirectRoute(user, item)
+                            : (item.route ?? '/');
+                        if (item.route == null) {
+                          Navigator.of(context).popUntil((r) => r.isFirst);
+                          return;
+                        }
+                        if (to == route) return;
+                        Navigator.of(context).pushNamedAndRemoveUntil(to, (r) => r.isFirst);
+                      },
+                    ),
                   ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SupportBottomNavItem extends StatelessWidget {
-  const _SupportBottomNavItem({
-    required this.active,
-    required this.locked,
-    required this.dark,
-    required this.onTap,
-  });
-
-  final bool active;
-  final bool locked;
-  final bool dark;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final inactive = dark ? AppBrand.textMutedDark : const Color(0xFF475569);
-    final activeColor = dark ? AppBrand.navActiveDark : AppBrand.primaryBlue;
-    final fg = active ? activeColor : inactive.withValues(alpha: locked ? 0.45 : 1);
-    final phoneFg = active ? fg : inactive.withValues(alpha: locked ? 0.4 : 0.85);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: locked ? null : onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              SupportMessengerIcons(size: 15, gap: 4, active: active, dark: dark),
-              const SizedBox(height: 3),
-              Text(
-                'Техподдержка',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 9.5,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-                  height: 1.1,
-                  color: fg,
-                ),
-              ),
-              Text(
-                PaymentConfig.supportPhone,
-                maxLines: 1,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
-                  height: 1.1,
-                  color: phoneFg,
-                ),
-              ),
-            ],
           ),
         ),
       ),

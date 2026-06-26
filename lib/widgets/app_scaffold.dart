@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
+import '../config/payment_config.dart';
 import '../utils/drawer_menu_items.dart';
 import '../utils/permissions.dart';
 import 'app_bottom_nav.dart';
 import 'app_header.dart';
 import 'low_stock_banner.dart';
+import 'support_contact.dart';
 import 'tojir_logo.dart';
 
 class AppScaffold extends StatelessWidget {
@@ -236,7 +238,17 @@ class _AppDrawer extends StatelessWidget {
               ),
             ),
             Container(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: Color(0x14FFFFFF))),
+              ),
+              child: _DrawerSupportTile(
+                selected: currentRoute == '/support',
+                onTap: () => _navigate(context, '/support'),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               decoration: const BoxDecoration(
                 border: Border(top: BorderSide(color: Color(0x14FFFFFF))),
               ),
@@ -318,6 +330,66 @@ class _DrawerGroupDivider extends StatelessWidget {
     return const Padding(
       padding: EdgeInsets.fromLTRB(8, 8, 8, 0),
       child: Divider(height: 1, thickness: 1, color: Color(0x14FFFFFF)),
+    );
+  }
+}
+
+class _DrawerSupportTile extends StatelessWidget {
+  const _DrawerSupportTile({required this.selected, required this.onTap});
+
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Material(
+        color: selected ? const Color(0x382563EB) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: selected ? Border.all(color: Colors.white.withValues(alpha: 0.18)) : null,
+            ),
+            child: Row(
+              children: [
+                const SupportMessengerIcons(size: 18, gap: 6, active: true),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Техподдержка',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                          color: Colors.white.withValues(alpha: selected ? 1 : 0.92),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        PaymentConfig.supportPhone,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white.withValues(alpha: 0.65),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, size: 18, color: Colors.white.withValues(alpha: 0.45)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
