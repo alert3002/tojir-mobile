@@ -12,6 +12,7 @@ import '../theme/app_shape.dart';
 import '../utils/number_format.dart';
 import '../utils/permissions.dart';
 import '../utils/product_scan_utils.dart';
+import '../utils/tj_phone.dart';
 import '../widgets/app_scaffold.dart';
 
 const _salesMobilePageSize = 10;
@@ -155,14 +156,26 @@ class _SalesScreenState extends State<SalesScreen> {
     }
   }
 
+  String? _apiDetail(String body) {
+    try {
+      final m = jsonDecode(body);
+      if (m is Map) {
+        final d = m['detail'];
+        if (d is String && d.trim().isNotEmpty) return d.trim();
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> _loadOutlets() async {
     final u = _user;
     if (u == null) return;
     setState(() => loadingOutlets = true);
     try {
       final api = context.read<ApiClient>();
-      // Server decides allowed outlets for seller; for others warehouse may be applied server-side too.
-      final res = await api.get('inventory/outlets');
+      final wh = u['warehouse'];
+      final path = wh != null ? 'inventory/outlets/?warehouse=$wh' : 'inventory/outlets/';
+      final res = await api.get(path);
       if (!mounted) return;
       if (res.statusCode == 200) {
         final d = jsonDecode(res.body);
@@ -182,6 +195,12 @@ class _SalesScreenState extends State<SalesScreen> {
           }
         } else if (saleOutletId != null) {
           await _loadOutletProducts(saleOutletId!);
+        }
+      } else {
+        setState(() => outlets = const []);
+        final msg = _apiDetail(res.body);
+        if (msg != null && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
         }
       }
     } catch (_) {
@@ -235,7 +254,7 @@ class _SalesScreenState extends State<SalesScreen> {
 
   bool get needsContact => paymentMethod == 'nasiya' || paymentMethod == 'partial';
 
-  bool get phoneOk => !needsContact || buyerPhone9.replaceAll(RegExp(r'\D'), '').length == 9;
+  bool get phoneOk => !needsContact || TjPhone.isValidMobile(buyerPhone9);
   bool get commentOk => !needsContact || buyerComment.trim().isNotEmpty;
   bool get smsOk => !needsContact || smsVerified;
 
@@ -273,8 +292,8 @@ class _SalesScreenState extends State<SalesScreen> {
   Future<void> _requestCheckoutSms() async {
     if (!needsContact) return;
     final digits = buyerPhone9.replaceAll(RegExp(r'\D'), '');
-    if (digits.length != 9) {
-      _snack('Введите номер после +992 (9 цифр)', error: true);
+    if (!TjPhone.isValidMobile(digits)) {
+      _snack(TjPhone.validationHint(), error: true);
       return;
     }
     if (buyerComment.trim().isEmpty) {
@@ -1902,7 +1921,9 @@ class _CheckoutCard extends StatelessWidget {
                     labelText: needsContact ? 'Телефон' : 'Телефон (необяз.)',
                     prefixText: '+992 ',
                     hintText: '90XXXXXXX',
-                    errorText: needsContact && buyerPhone9.replaceAll(RegExp(r'\D'), '').length != 9 ? '9 цифр после +992' : null,
+                    errorText: needsContact && buyerPhone9.isNotEmpty && !TjPhone.isValidMobile(buyerPhone9)
+                        ? TjPhone.validationHint()
+                        : null,
                   ),
                   keyboardType: TextInputType.phone,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(9)],

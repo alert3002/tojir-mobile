@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
+import '../utils/platform_info.dart';
 import 'auth_storage.dart';
 import 'dio_http_setup.dart';
 
@@ -14,10 +15,23 @@ class ApiClient {
   final AuthStorage _storage;
   Future<String?>? _refreshInFlight;
 
+  String _ensureDjangoTrailingSlash(String path) {
+    // Django APPEND_SLASH: без / перед ? — 301; в браузере при редиректе теряется Authorization → 401.
+    final qIdx = path.indexOf('?');
+    final hashIdx = path.indexOf('#');
+    var splitIdx = path.length;
+    if (qIdx >= 0) splitIdx = qIdx;
+    if (hashIdx >= 0 && hashIdx < splitIdx) splitIdx = hashIdx;
+    final pathPart = path.substring(0, splitIdx);
+    final suffix = path.substring(splitIdx);
+    if (pathPart.isEmpty || pathPart.endsWith('/')) return path;
+    return '$pathPart/$suffix';
+  }
+
   String _cleanUrl(String path) {
     final b = AppConfig.apiBase.replaceAll(RegExp(r'/+$'), '');
     final p = path.startsWith('/') ? path.substring(1) : path;
-    return '$b/$p';
+    return '$b/${_ensureDjangoTrailingSlash(p)}';
   }
 
   bool _isAuthPath(String path) {
@@ -60,6 +74,9 @@ class ApiClient {
           }
           options.headers['Content-Type'] = 'application/json';
           options.headers['Connection'] = 'close';
+          if (isIosApp) {
+            options.headers['X-Tojir-Client'] = 'ios';
+          }
           return handler.next(options);
         },
         onResponse: (response, handler) async {

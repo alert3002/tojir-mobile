@@ -11,7 +11,6 @@ import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
 import '../utils/platform_info.dart';
 import '../widgets/app_scaffold.dart';
-import '../widgets/ios_balance_topup_info.dart';
 import '../widgets/skeleton_loading.dart';
 
 double? _asDouble(dynamic v) {
@@ -441,7 +440,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           _kv('Склад', _sellerWarehouseLabel(u), cs),
                           _kv('Доступ в магазины', _allowedOutletNames(u), cs),
                         ],
-                        _kv('Баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true),
+                        if (!isIosApp)
+                          _kv('Баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true)
+                        else if (balance > 0)
+                          _kv('Реферальный баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true),
                         const SizedBox(height: 10),
                         if (isIosApp) ...[
                           FilledButton.icon(
@@ -450,13 +452,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             label: const Text('Подписка через App Store'),
                           ),
                           const SizedBox(height: 10),
-                          const IosBalanceTopupInstructions(),
-                          const SizedBox(height: 10),
-                          OutlinedButton.icon(
-                            onPressed: () => setState(() => withdrawOpen = true),
-                            icon: const Icon(Icons.remove, size: 18),
-                            label: const Text('Запросить вывод'),
+                          Text(
+                            'Подписка TOJIr на iPhone/iPad оформляется только через App Store. '
+                            'Баланс используется для реферальных начислений и вывода, не для оплаты подписки.',
+                            style: TextStyle(fontSize: 13, height: 1.4, color: cs.onSurfaceVariant),
                           ),
+                          if (balance > 0) ...[
+                            const SizedBox(height: 10),
+                            OutlinedButton.icon(
+                              onPressed: () => setState(() => withdrawOpen = true),
+                              icon: const Icon(Icons.remove, size: 18),
+                              label: const Text('Запросить вывод'),
+                            ),
+                          ],
                         ] else
                           Wrap(
                             spacing: 10,

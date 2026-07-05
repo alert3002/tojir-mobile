@@ -9,6 +9,7 @@ import '../services/api_client.dart';
 import '../theme/app_shape.dart';
 import '../utils/date_range_presets.dart';
 import '../utils/permissions.dart';
+import '../utils/tj_phone.dart';
 import '../widgets/app_scaffold.dart';
 import '../widgets/skeleton_loading.dart';
 import '../widgets/quick_date_range_chips.dart';
@@ -1162,12 +1163,12 @@ class _AddDebtSheetState extends State<_AddDebtSheet> {
     cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
   }
 
-  bool get phoneOk => phoneSuffix.replaceAll(RegExp(r'\D'), '').length == 9;
+  bool get phoneOk => TjPhone.isValidMobile(phoneSuffix);
 
   Future<void> _requestSms() async {
     final digits = phoneSuffix.replaceAll(RegExp(r'\D'), '');
-    if (digits.length != 9) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Введите номер после +992 (9 цифр)')));
+    if (!TjPhone.isValidMobile(digits)) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(TjPhone.validationHint())));
       return;
     }
     if (debtorCtrl.text.trim().isEmpty) {
@@ -1346,7 +1347,7 @@ class _AddDebtSheetState extends State<_AddDebtSheet> {
                 labelText: 'Телефон *',
                 prefixText: '+992 ',
                 border: const OutlineInputBorder(),
-                errorText: phoneSuffix.isNotEmpty && !phoneOk ? 'Нужно 9 цифр' : null,
+                errorText: phoneSuffix.isNotEmpty && !phoneOk ? TjPhone.validationHint() : null,
               ),
               keyboardType: TextInputType.phone,
               onChanged: (raw) {

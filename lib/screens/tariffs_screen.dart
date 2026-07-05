@@ -367,6 +367,25 @@ class _TariffsScreenState extends State<TariffsScreen> {
     await _buyTariff(id, payload: payload);
   }
 
+  Future<void> _restoreApplePurchases() async {
+    setState(() => buyingId = -1);
+    await IapService.instance.restorePurchases(
+      onSuccess: () async {
+        if (!mounted) return;
+        _snack('Покупки восстановлены');
+        await _load();
+        await context.read<SessionController>().bootstrap();
+        if (mounted) setState(() => buyingId = null);
+      },
+      onError: (msg) {
+        if (mounted) {
+          _snack(msg, error: true);
+          setState(() => buyingId = null);
+        }
+      },
+    );
+  }
+
   Future<void> _buyTariffViaApple(
     Map<String, dynamic> t,
     String productId, {
@@ -569,9 +588,13 @@ class _TariffsScreenState extends State<TariffsScreen> {
     final id = _asInt(t['id']) ?? -1;
     final activeNow = _isSameTariff(t, user, hasActive);
     final vipCalc = kind == 'vip' ? _calcVipPrice(t, vipProducts, vipStores) : null;
-    final priceText = kind == 'vip'
-        ? '${vipCalc!.total.toStringAsFixed(2)} смн'
-        : '${(_asDouble(t['price_somoni']) ?? 0).toStringAsFixed(2)} смн';
+    final appleId = _appleProductId(t);
+    final applePrice = (isIosApp && appleId != null) ? iapProducts[appleId]?.price : null;
+    final priceText = isIosApp && _isPaidTariff(t)
+        ? (applePrice ?? 'App Store')
+        : kind == 'vip'
+            ? '${vipCalc!.total.toStringAsFixed(2)} смн'
+            : '${(_asDouble(t['price_somoni']) ?? 0).toStringAsFixed(2)} смн';
     final duration = _asInt(t['duration_days']) ?? 0;
     final maxProducts = t['max_products'];
     final maxStores = _asInt(t['max_stores']) ?? 0;
@@ -826,6 +849,19 @@ class _TariffsScreenState extends State<TariffsScreen> {
               ),
               const SizedBox(height: 16),
               _currentSubscriptionCard(u, locked, daysLeft, expiresAt),
+              if (isIosApp) ...[
+                OutlinedButton.icon(
+                  onPressed: buyingId == -1 ? null : _restoreApplePurchases,
+                  icon: const Icon(Icons.restore_rounded, size: 18),
+                  label: const Text('Восстановить покупки App Store'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Подписка на iOS оформляется только через App Store (In-App Purchase).',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
+                ),
+                const SizedBox(height: 12),
+              ],
               Container(
                 key: _listKey,
                 padding: const EdgeInsets.all(14),

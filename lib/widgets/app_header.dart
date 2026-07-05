@@ -5,6 +5,7 @@ import '../auth/session_controller.dart';
 import '../theme/app_brand.dart';
 import '../theme/theme_controller.dart';
 import '../utils/permissions.dart';
+import '../utils/platform_info.dart';
 import 'tojir_logo.dart';
 
 class AppHeader extends StatelessWidget {
@@ -122,26 +123,27 @@ class AppHeader extends StatelessWidget {
               },
             ),
             const SizedBox(width: 4),
-            Flexible(
-              child: InkWell(
-                onTap: () => Navigator.of(context).pushNamed('/profile'),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-                  child: Text(
-                    '$bal TJS',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: cs.onSurface,
+            if (!isIosApp)
+              Flexible(
+                child: InkWell(
+                  onTap: () => Navigator.of(context).pushNamed('/profile'),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+                    child: Text(
+                      '$bal TJS',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: cs.onSurface,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
           ],
         ),
       ),

@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../auth/session_controller.dart';
 import '../config/app_config.dart';
 import '../theme/auth_theme.dart';
+import '../utils/tj_phone.dart';
 import '../widgets/auth_offer_toggle.dart';
 import '../widgets/tojir_logo.dart';
 
@@ -111,7 +112,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  bool get _phoneIsComplete => _digitsOnly(_phone.text).length == 9;
+  bool get _phoneIsComplete => TjPhone.isValidMobile(_phone.text);
 
   void _showSnack(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -217,15 +218,25 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _buildPhoneHelp(Brightness brightness) {
     final d = _digitsOnly(_phone.text);
     if (d.isEmpty) return const SizedBox.shrink();
-    if (_phoneIsComplete) {
+    if (d.length == 9 && TjPhone.isValidMobile(d)) {
+      final op = TjPhone.operatorName(d);
       return Padding(
         padding: const EdgeInsets.only(top: 4),
         child: Text(
-          'Номер корректный',
+          op != null ? 'Номер корректный · $op' : 'Номер корректный',
           style: TextStyle(
             fontSize: 14,
             color: AuthTheme.successGreen.withValues(alpha: brightness == Brightness.dark ? 0.95 : 1),
           ),
+        ),
+      );
+    }
+    if (d.length == 9) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          TjPhone.validationHint(),
+          style: const TextStyle(fontSize: 13, color: AuthTheme.requiredRed),
         ),
       );
     }

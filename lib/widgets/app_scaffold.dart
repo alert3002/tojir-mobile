@@ -5,6 +5,7 @@ import '../auth/session_controller.dart';
 import '../config/payment_config.dart';
 import '../utils/drawer_menu_items.dart';
 import '../utils/permissions.dart';
+import '../utils/platform_info.dart';
 import 'app_bottom_nav.dart';
 import 'app_header.dart';
 import 'low_stock_banner.dart';
@@ -97,7 +98,7 @@ class _AppDrawer extends StatelessWidget {
     final roleLabel = getRoleLabel(user);
     final sectionItems = warehouseLocked ? const <DrawerMenuItem>[] : getDrawerSectionItems(user);
     final balance = _balance();
-    final showBalance = (user?['role'] == 'businessman' || user?['role'] == 'seller') && balance != null;
+    final showBalance = !isIosApp && (user?['role'] == 'businessman' || user?['role'] == 'seller') && balance != null;
 
     return Drawer(
       width: 300,
