@@ -1,7 +1,9 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
@@ -9,7 +11,6 @@ import '../services/iap_service.dart';
 import '../utils/permissions.dart';
 import '../utils/platform_info.dart';
 import '../widgets/app_scaffold.dart';
-import 'package:in_app_purchase/in_app_purchase.dart';
 
 const _cardBg = Color(0xFF1E293B);
 const _blue = Color(0xFF2563EB);
@@ -764,7 +765,8 @@ class _TariffsScreenState extends State<TariffsScreen> {
           child: TextFormField(
             key: ValueKey('$label-$value'),
             initialValue: value.toString(),
-            keyboardType: TextInputType.number,
+            keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             textAlign: TextAlign.center,
             decoration: InputDecoration(
               isDense: true,
@@ -774,7 +776,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
               fillColor: Colors.white.withValues(alpha: 0.04),
             ),
             onChanged: (v) {
-              final n = int.tryParse(v.replaceAll(RegExp(r'\D'), ''));
+              final n = int.tryParse(v);
               if (n == null) return;
               onChanged(n < min ? min : n);
             },

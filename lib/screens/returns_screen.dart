@@ -11,6 +11,7 @@ import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
 import '../utils/product_scan_utils.dart';
 import '../widgets/app_scaffold.dart';
+import '../widgets/quick_date_range_chips.dart';
 import '../widgets/skeleton_loading.dart';
 
 const _salesPageSize = 8;
@@ -34,6 +35,7 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
 
   int? filterOutletId;
   DateTimeRange? dateRange;
+  String? historyPreset = 'month';
   String search = '';
   String saleSearch = '';
   bool showTrash = false;
@@ -54,6 +56,10 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
     super.initState();
     saleSearchCtrl.addListener(_onSaleSearchChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      setState(() {
+        historyPreset = 'month';
+        dateRange = _historyRangeForPreset('month');
+      });
       await _loadOutlets();
       await _load();
       await _loadSales();
@@ -392,8 +398,39 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
       initialDateRange: dateRange ?? DateTimeRange(start: now.subtract(const Duration(days: 30)), end: now),
     );
     if (picked == null || !mounted) return;
-    setState(() => dateRange = picked);
-    await _load();
+    setState(() {
+      historyPreset = 'custom';
+      dateRange = picked;
+    });
+  }
+
+  DateTimeRange _historyRangeForPreset(String key) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    switch (key) {
+      case 'today':
+        return DateTimeRange(start: today, end: today);
+      case 'week':
+        return DateTimeRange(start: today.subtract(const Duration(days: 6)), end: today);
+      case 'month':
+        return DateTimeRange(start: DateTime(today.year, today.month, 1), end: today);
+      default:
+        return DateTimeRange(start: today.subtract(const Duration(days: 30)), end: today);
+    }
+  }
+
+  void _applyHistoryPreset(String key) {
+    setState(() {
+      historyPreset = key;
+      dateRange = _historyRangeForPreset(key);
+      historyPage = 1;
+    });
+  }
+
+  void _applyHistoryFilters() {
+    search = historySearchCtrl.text;
+    setState(() => historyPage = 1);
+    _load();
   }
 
   @override
@@ -422,45 +459,55 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 14),
             children: [
-              Text('Возвраты', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: cs.onSurface, height: 1.25)),
+              Text('Возвраты', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: cs.onSurface, height: 1.25)),
               const SizedBox(height: 10),
               _ReturnsCard(
                 title: 'Оформить возврат',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: scanCtrl,
-                            decoration: const InputDecoration(
-                              isDense: true,
-                              prefixIcon: Icon(Icons.qr_code_2_rounded, size: 20),
-                              hintText: 'Сканируйте штрих-код или IMEI...',
-                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.1)),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: scanCtrl,
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                hintText: 'Сканируйте штрих-код или IMEI...',
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              ),
+                              onSubmitted: _onScanSale,
                             ),
-                            onSubmitted: _onScanSale,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          height: 44,
-                          width: 44,
-                          child: FilledButton(
-                            onPressed: () => _onScanSale(scanCtrl.text),
-                            style: FilledButton.styleFrom(padding: EdgeInsets.zero, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                            child: const Icon(Icons.center_focus_weak_rounded, size: 22),
+                          SizedBox(
+                            height: 44,
+                            child: FilledButton(
+                              onPressed: () => _onScanSale(scanCtrl.text),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF2563EB),
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                              ),
+                              child: const Text('Скан', style: TextStyle(fontWeight: FontWeight.w700)),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: saleSearchCtrl,
                       decoration: InputDecoration(
                         isDense: true,
-                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
                         hintText: 'Поиск продажи по товару',
                         suffixIcon: IconButton(
                           icon: const Icon(Icons.search_rounded, size: 20),
@@ -470,12 +517,16 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                       ),
                       onSubmitted: (_) => _loadSales(),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     DropdownButtonFormField<int>(
                       key: ValueKey<int?>(filterOutletId),
                       initialValue: filterOutletId,
                       isExpanded: true,
-                      decoration: const InputDecoration(isDense: true, labelText: 'Магазин', contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: 'Все магазины',
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      ),
                       items: [
                         if (allowOutletClear) const DropdownMenuItem<int>(value: null, child: Text('Все магазины')),
                         ...outlets.map((o) {
@@ -491,7 +542,7 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                         _load();
                       },
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     if (salesLoading)
                       const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))))
                     else if (sales.isEmpty)
@@ -500,14 +551,20 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                         child: Text('Нет продаж за 30 дней', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
                       )
                     else ...[
-                      _SalesTableHeader(cs: cs, dark: dark),
-                      for (final s in salesSlice) _SalesTableRow(record: s, cs: cs, dark: dark, onReturn: () => _openReturnModal(s)),
-                      if (sales.length > _salesPageSize) _Pager(page: salesPage, total: (sales.length / _salesPageSize).ceil(), onPrev: salesPage > 1 ? () => setState(() => salesPage--) : null, onNext: salesPage * _salesPageSize < sales.length ? () => setState(() => salesPage++) : null),
+                      _SalesHeaderCard(cs: cs, dark: dark),
+                      for (final s in salesSlice) _SalesReturnCard(record: s, cs: cs, dark: dark, onReturn: () => _openReturnModal(s)),
+                      if (sales.length > _salesPageSize)
+                        _Pager(
+                          page: salesPage,
+                          hasMore: salesPage * _salesPageSize < sales.length,
+                          onPrev: salesPage > 1 ? () => setState(() => salesPage--) : null,
+                          onNext: salesPage * _salesPageSize < sales.length ? () => setState(() => salesPage++) : null,
+                        ),
                     ],
                   ],
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 12),
               _ReturnsCard(
                 title: 'История возвратов',
                 child: Column(
@@ -515,14 +572,23 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                   children: [
                     TextField(
                       controller: historySearchCtrl,
-                      decoration: InputDecoration(
+                      decoration: const InputDecoration(
                         isDense: true,
                         hintText: 'Поиск по товару',
-                        suffixIcon: IconButton(icon: const Icon(Icons.search_rounded, size: 20), onPressed: () { search = historySearchCtrl.text; _load(); }),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                       ),
                       onChanged: (v) => search = v,
-                      onSubmitted: (_) => _load(),
+                      onSubmitted: (_) => _applyHistoryFilters(),
+                    ),
+                    const SizedBox(height: 8),
+                    QuickDateRangeChips(
+                      colorScheme: cs,
+                      selected: historyPreset == 'custom' ? null : historyPreset,
+                      showPeriod: false,
+                      onToday: () => _applyHistoryPreset('today'),
+                      onWeek: () => _applyHistoryPreset('week'),
+                      onMonth: () => _applyHistoryPreset('month'),
+                      onPeriod: _pickHistoryRange,
                     ),
                     const SizedBox(height: 8),
                     Material(
@@ -531,34 +597,35 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                         borderRadius: BorderRadius.circular(10),
                         onTap: _pickHistoryRange,
                         child: Ink(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08)),
                           ),
                           child: Row(
                             children: [
-                              Expanded(child: Text(dateRange != null ? _fmtYmd(dateRange!.start) : 'Дата от', style: TextStyle(fontSize: 13, color: dateRange != null ? cs.onSurface : cs.onSurfaceVariant))),
-                              Icon(Icons.arrow_forward_rounded, size: 14, color: cs.onSurfaceVariant),
-                              Expanded(child: Text(dateRange != null ? _fmtYmd(dateRange!.end) : 'Дата до', textAlign: TextAlign.end, style: TextStyle(fontSize: 13, color: dateRange != null ? cs.onSurface : cs.onSurfaceVariant))),
-                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  dateRange != null ? '${_fmtYmd(dateRange!.start)} → ${_fmtYmd(dateRange!.end)}' : 'Начальная дата → Конечная дата',
+                                  style: TextStyle(fontSize: 13, color: dateRange != null ? cs.onSurface : cs.onSurfaceVariant),
+                                ),
+                              ),
                               Icon(Icons.calendar_month_rounded, size: 18, color: cs.onSurfaceVariant),
                             ],
                           ),
                         ),
                       ),
                     ),
-                    if (dateRange != null)
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(onPressed: () { setState(() => dateRange = null); _load(); }, child: const Text('Сбросить даты')),
-                      ),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<int>(
                       key: ValueKey<String>('hist-$filterOutletId'),
                       initialValue: filterOutletId,
                       isExpanded: true,
-                      decoration: const InputDecoration(isDense: true, labelText: 'Магазин (все)', contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        hintText: 'Все магазины',
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      ),
                       items: [
                         if (allowOutletClear) const DropdownMenuItem<int>(value: null, child: Text('Все магазины')),
                         ...outlets.map((o) {
@@ -570,19 +637,31 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                       ],
                       onChanged: (v) {
                         setState(() => filterOutletId = v);
-                        _load();
-                        _loadSales();
                       },
                     ),
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Switch(value: showTrash, onChanged: (v) { setState(() => showTrash = v); _load(); }, materialTapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                        Switch(value: showTrash, onChanged: (v) => setState(() => showTrash = v), materialTapTargetSize: MaterialTapTargetSize.shrinkWrap),
                         const SizedBox(width: 8),
                         Text('В корзине', style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
                       ],
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _applyHistoryFilters,
+                        icon: const Icon(Icons.refresh_rounded, size: 18),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          minimumSize: const Size(0, 40),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        label: const Text('Применить', style: TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     if (loading)
                       const SkeletonListBlock(rows: 4)
                     else if (rows.isEmpty)
@@ -604,7 +683,7 @@ class _ReturnsScreenState extends State<ReturnsScreen> {
                       if (rows.length > _historyPageSize)
                         _Pager(
                           page: historyPage,
-                          total: (rows.length / _historyPageSize).ceil(),
+                          hasMore: historyPage * _historyPageSize < rows.length,
                           onPrev: historyPage > 1 ? () => setState(() => historyPage--) : null,
                           onNext: historyPage * _historyPageSize < rows.length ? () => setState(() => historyPage++) : null,
                         ),
@@ -627,42 +706,49 @@ class _ReturnsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
     return Container(
-      decoration: AppBrand.cardDecoration(context),
+      margin: const EdgeInsets.only(bottom: 0),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: dark ? AppBrand.darkCard : cs.surface,
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            height: 36,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            alignment: Alignment.centerLeft,
-            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.25)))),
-            child: Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: cs.onSurface)),
-          ),
-          Padding(padding: const EdgeInsets.fromLTRB(12, 10, 12, 10), child: child),
+          Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: cs.onSurface)),
+          const SizedBox(height: 10),
+          child,
         ],
       ),
     );
   }
 }
 
-class _SalesTableHeader extends StatelessWidget {
-  const _SalesTableHeader({required this.cs, required this.dark});
+class _SalesHeaderCard extends StatelessWidget {
+  const _SalesHeaderCard({required this.cs, required this.dark});
   final ColorScheme cs;
   final bool dark;
 
   @override
   Widget build(BuildContext context) {
-    TextStyle h = TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant);
+    final h = TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurfaceVariant.withValues(alpha: 0.85));
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)))),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: dark ? AppBrand.darkRow : cs.surfaceContainer,
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+      ),
       child: Row(
         children: [
-          Expanded(flex: 3, child: Text('Дата', style: h)),
-          Expanded(flex: 4, child: Text('Магазин', style: h)),
-          Expanded(flex: 2, child: Text('Кол-во', style: h, textAlign: TextAlign.right)),
+          Expanded(flex: 10, child: Text('Дата', style: h)),
+          Expanded(flex: 12, child: Text('Магазин', style: h)),
+          Expanded(flex: 6, child: Text('Кол-во', style: h, textAlign: TextAlign.right)),
           const SizedBox(width: 88),
         ],
       ),
@@ -670,8 +756,8 @@ class _SalesTableHeader extends StatelessWidget {
   }
 }
 
-class _SalesTableRow extends StatelessWidget {
-  const _SalesTableRow({required this.record, required this.cs, required this.dark, required this.onReturn});
+class _SalesReturnCard extends StatelessWidget {
+  const _SalesReturnCard({required this.record, required this.cs, required this.dark, required this.onReturn});
   final Map<String, dynamic> record;
   final ColorScheme cs;
   final bool dark;
@@ -683,27 +769,64 @@ class _SalesTableRow extends StatelessWidget {
     final ret = _asDouble(record['total_returned']) ?? 0;
     final soldAt = (record['sold_at'] ?? '').toString();
     final date = soldAt.isEmpty ? '—' : soldAt.substring(0, soldAt.length.clamp(0, 10));
+    final product = (record['product_name'] ?? '').toString();
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: dark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.04)))),
-      child: Row(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        color: dark ? AppBrand.darkRow : cs.surfaceContainer,
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(flex: 3, child: Text(date, style: TextStyle(fontSize: 12, color: cs.onSurface))),
-          Expanded(flex: 4, child: Text((record['outlet_name'] ?? '—').toString(), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: cs.onSurface))),
-          Expanded(flex: 2, child: Text(_fmtQty(sold), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, color: cs.onSurface))),
-          SizedBox(
-            width: 88,
-            child: ret >= sold
-                ? Text('Возвращено', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant))
-                : Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton(
-                      onPressed: onReturn,
-                      style: FilledButton.styleFrom(minimumSize: const Size(0, 28), padding: const EdgeInsets.symmetric(horizontal: 10), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                      child: const Text('Вернуть', style: TextStyle(fontSize: 12)),
-                    ),
-                  ),
+          Row(
+            children: [
+              Expanded(
+                flex: 10,
+                child: Text(date, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.onSurface)),
+              ),
+              Expanded(
+                flex: 12,
+                child: Text(
+                  (record['outlet_name'] ?? '—').toString(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: cs.onSurface),
+                ),
+              ),
+              Expanded(
+                flex: 6,
+                child: Text(_fmtQty(sold), textAlign: TextAlign.right, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.onSurface)),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 80,
+                child: ret >= sold
+                    ? Text('Возвращено', textAlign: TextAlign.right, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant))
+                    : SizedBox(
+                        height: 28,
+                        child: FilledButton(
+                          onPressed: onReturn,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF2563EB),
+                            minimumSize: const Size(0, 28),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                          child: const Text('Вернуть', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                        ),
+                      ),
+              ),
+            ],
           ),
+          if (product.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(product, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+          ],
         ],
       ),
     );
@@ -728,8 +851,8 @@ class _HistoryRow extends StatelessWidget {
     final prod = (record['sale_product_name'] ?? '—').toString();
     final rq = record['quantity_returned'];
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10),
         color: dark ? AppBrand.darkRow : cs.surfaceContainer,
@@ -742,30 +865,32 @@ class _HistoryRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(prod, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14, color: cs.onSurface)),
+                Text(prod, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: cs.onSurface)),
                 const SizedBox(height: 2),
-                Text('$date · $outlet', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                Text('возврат: ${rq ?? '—'}', style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                Text(
+                  '$date · $outlet · возврат: ${rq ?? '—'}',
+                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                ),
               ],
             ),
           ),
-          if (showTrash) ...[
-            IconButton(visualDensity: VisualDensity.compact, padding: EdgeInsets.zero, constraints: const BoxConstraints(minWidth: 32, minHeight: 32), onPressed: onRestore, icon: const Icon(Icons.undo_rounded, size: 20)),
+          if (showTrash)
             IconButton(
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              onPressed: deleting ? null : onDelete,
-              icon: deleting ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFEF4444)),
+              onPressed: onRestore,
+              icon: const Icon(Icons.undo_rounded, size: 20),
             ),
-          ] else
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              onPressed: deleting ? null : onDelete,
-              icon: deleting ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFEF4444)),
-            ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: deleting ? null : onDelete,
+            icon: deleting
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFEF4444)),
+          ),
         ],
       ),
     );
@@ -773,28 +898,39 @@ class _HistoryRow extends StatelessWidget {
 }
 
 class _Pager extends StatelessWidget {
-  const _Pager({required this.page, required this.total, required this.onPrev, required this.onNext});
+  const _Pager({required this.page, required this.hasMore, required this.onPrev, required this.onNext});
   final int page;
-  final int total;
+  final bool hasMore;
   final VoidCallback? onPrev;
   final VoidCallback? onNext;
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.only(top: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          IconButton(visualDensity: VisualDensity.compact, onPressed: onPrev, icon: const Icon(Icons.chevron_left_rounded, size: 20)),
-          Container(
-            width: 28,
-            height: 28,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(color: AppBrand.primaryBlue, borderRadius: BorderRadius.circular(999)),
-            child: Text('$page', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            onPressed: onPrev,
+            icon: const Icon(Icons.chevron_left_rounded, size: 20),
           ),
-          IconButton(visualDensity: VisualDensity.compact, onPressed: onNext, icon: const Icon(Icons.chevron_right_rounded, size: 20)),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              color: dark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.05),
+              border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+            ),
+            child: Text('Стр. $page', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+          ),
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            onPressed: hasMore ? onNext : null,
+            icon: const Icon(Icons.chevron_right_rounded, size: 20),
+          ),
         ],
       ),
     );

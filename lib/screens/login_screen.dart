@@ -115,7 +115,39 @@ class _LoginScreenState extends State<LoginScreen> {
   bool get _phoneIsComplete => TjPhone.isValidMobile(_phone.text);
 
   void _showSnack(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    final clean = text.replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+    if (clean.isEmpty) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(clean)));
+  }
+
+  void _showLoginError(Object error) {
+    var text = error
+        .toString()
+        .replaceFirst(RegExp(r'^Exception:\s*'), '')
+        .replaceFirst(RegExp(r'^ArgumentError:\s*'), '')
+        .trim();
+    if (text.contains('DioException') ||
+        text.contains('bad response') ||
+        text.contains('status code of') ||
+        text.length > 220) {
+      text = 'Не удалось выполнить вход. Проверьте интернет и попробуйте снова.';
+    }
+    if (text.isEmpty) {
+      text = 'Не удалось выполнить вход. Попробуйте снова.';
+    }
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Вход'),
+        content: Text(text),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('ОК'),
+          ),
+        ],
+      ),
+    );
   }
 
   bool _ensureOfferAccepted() {
@@ -150,7 +182,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _tickResend();
       _showSnack(res.isNewUser ? 'Код отправлен — завершите регистрацию' : 'Код отправлен');
     } catch (e) {
-      _showSnack('$e');
+      _showLoginError(e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -204,7 +236,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _showSnack(_isNewUser ? 'Регистрация завершена' : 'Вход выполнен');
       }
     } catch (e) {
-      _showSnack('$e');
+      _showLoginError(e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }

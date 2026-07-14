@@ -266,5 +266,9 @@ List<Color> sellerToneGradient(String tone) {
 String? formatDebtBadgeAmounts(List<Map<String, dynamic>> lines, bool negative) {
   if (lines.isEmpty) return null;
   final sign = negative ? '−' : '+';
-  return lines.map((x) => '$sign${x['amount']}').join(' ');
+  return lines.map((x) {
+    final raw = x['amount'];
+    final n = raw is num ? raw.toDouble() : double.tryParse(raw?.toString() ?? '') ?? 0;
+    return '$sign${n.round()}';
+  }).join(' · ');
 }

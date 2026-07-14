@@ -166,17 +166,12 @@ DateTimeRange reportsTodayRange() {
 
 DateTimeRange reportsIsoWeekRange() {
   final now = DateTime.now();
-  final monday = now.subtract(Duration(days: now.weekday - DateTime.monday));
-  final sunday = monday.add(const Duration(days: 6));
-  return DateTimeRange(
-    start: DateTime(monday.year, monday.month, monday.day),
-    end: DateTime(sunday.year, sunday.month, sunday.day),
-  );
+  final today = DateTime(now.year, now.month, now.day);
+  return DateTimeRange(start: today.subtract(const Duration(days: 6)), end: today);
 }
 
 DateTimeRange reportsFullMonthRange() {
   final now = DateTime.now();
-  final start = DateTime(now.year, now.month, 1);
-  final end = DateTime(now.year, now.month + 1, 0);
-  return DateTimeRange(start: start, end: end);
+  final today = DateTime(now.year, now.month, now.day);
+  return DateTimeRange(start: DateTime(today.year, today.month, 1), end: today);
 }

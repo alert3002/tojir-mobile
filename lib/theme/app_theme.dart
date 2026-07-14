@@ -17,10 +17,14 @@ ThemeData buildTojirTheme({
     surface: brightness == Brightness.dark ? (darkSurface ?? AppBrand.darkPage) : null,
     dynamicSchemeVariant: DynamicSchemeVariant.fidelity,
   );
+  // Primary blue buttons always use white label/icon (Material seed can pick dark onPrimary).
+  colorScheme = colorScheme.copyWith(
+    primary: AppBrand.primaryBlue,
+    onPrimary: Colors.white,
+  );
   if (brightness == Brightness.dark) {
     final page = darkSurface ?? AppBrand.darkPage;
     colorScheme = colorScheme.copyWith(
-      primary: AppBrand.primaryBlue,
       surface: page,
       surfaceContainerLowest: page,
       surfaceContainerLow: AppBrand.darkCard,
@@ -107,10 +111,29 @@ ThemeData buildTojirTheme({
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         elevation: 0,
+        backgroundColor: AppBrand.primaryBlue,
+        foregroundColor: Colors.white,
+        disabledForegroundColor: Colors.white.withValues(alpha: 0.45),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        textStyle: const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0.1),
+        textStyle: const TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0.1, color: Colors.white),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r)),
       ),
+    ),
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+        elevation: 0,
+        backgroundColor: AppBrand.primaryBlue,
+        foregroundColor: Colors.white,
+        disabledForegroundColor: Colors.white.withValues(alpha: 0.45),
+        textStyle: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r)),
+      ),
+    ),
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(rLg)),
+      elevation: 2,
+      backgroundColor: AppBrand.primaryBlue,
+      foregroundColor: Colors.white,
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
@@ -156,10 +179,6 @@ ThemeData buildTojirTheme({
     popupMenuTheme: PopupMenuThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r)),
       elevation: 3,
-    ),
-    floatingActionButtonTheme: FloatingActionButtonThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(rLg)),
-      elevation: 2,
     ),
     listTileTheme: ListTileThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(r)),

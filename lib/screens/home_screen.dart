@@ -122,9 +122,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (role == 'platform' || (role == 'moderator' && (u['moderator_scope'] as String?) == 'platform')) {
       return const PlatformHomeRedirect();
     }
+    final canSeeCourse = canAccessSection(u, 'course', null);
     final debtWe = formatDebtBadgeAmounts(_weOwe, true);
     final debtCo = formatDebtBadgeAmounts(_clientOwes, false);
-    final canSeeCourse = canAccessSection(u, 'course', null);
 
     if (isClientLike(u)) {
       return AppScaffold(
@@ -144,8 +144,6 @@ class _HomeScreenState extends State<HomeScreen> {
           user: u,
           usdToTjs: _usdToTjs,
           canSeeCourse: canSeeCourse,
-          debtWe: debtWe,
-          debtCo: debtCo,
           onNavigate: _go,
           onRefresh: _loadAll,
         ),
@@ -161,16 +159,16 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Stack(
         children: [
           RefreshIndicator(
-            onRefresh: _loadAll,
-            child: ListView(
+          onRefresh: _loadAll,
+          child: ListView(
               padding: EdgeInsets.fromLTRB(12, 6, 12, businessman ? 88 : 12),
-              children: [
+            children: [
                 if (businessman && _kpi != null) _KpiStrip(kpi: _kpi!),
                 if (canSeeCourse) ...[
                   _RatePill(value: _usdToTjs, onTap: () => _go('/course')),
-                  SizedBox(height: businessman ? 10 : 8),
                 ],
-                if (gridCards.isNotEmpty)
+                if (gridCards.isNotEmpty) ...[
+                  if (canSeeCourse) const SizedBox(height: 2),
                   businessman
                       ? BusinessmanHomeGrid(
                           cards: gridCards,
@@ -181,10 +179,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       : _AccentGrid(
                           cards: gridCards,
                           columns: 2,
-                          debtWe: debtWe,
-                          debtCo: debtCo,
                           onTap: _go,
                         ),
+                ],
               ],
             ),
           ),
@@ -225,15 +222,15 @@ class _KpiStrip extends StatelessWidget {
     final lowStock = parseJsonInt(kpi['low_stock_count']) ?? 0;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
+        decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(14),
         color: cs.surfaceContainerLow,
         border: Border.all(color: cs.outlineVariant.withValues(alpha: dark ? 0.35 : 0.45)),
-      ),
-      child: Row(
-        children: [
+        ),
+        child: Row(
+          children: [
           _KpiItem(label: 'Продажи сегодня', value: '${formatRuInt(num.tryParse(salesTjs.replaceAll(' ', '')) ?? 0)} TJS'),
           _KpiItem(label: 'Расходы', value: '${expenses.round()} TJS'),
           _KpiItem(label: 'Мало на складе', value: '$lowStock'),
@@ -256,9 +253,19 @@ class _KpiItem extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant)),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+          ),
           const SizedBox(height: 2),
-          Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: cs.onSurface)),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: cs.onSurface),
+          ),
         ],
       ),
     );
@@ -277,10 +284,10 @@ class _RatePill extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
@@ -304,13 +311,6 @@ class _RatePill extends StatelessWidget {
                       const Color(0xFF22C55E).withValues(alpha: 0.18),
                     ],
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF2563EB).withValues(alpha: dark ? 0.18 : 0.14),
-                      blurRadius: dark ? 26 : 20,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
                 ),
                 child: Text(
                   '\$',
@@ -323,8 +323,8 @@ class _RatePill extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Text('Курс:', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: cs.onSurfaceVariant)),
-              const Spacer(),
-              Flexible(
+              const SizedBox(width: 8),
+              Expanded(
                 child: Text(
                   value != null ? '1 USD = ${formatRuMoney(value!, fractionDigits: 2)} TJS' : '—',
                   maxLines: 1,
@@ -333,7 +333,7 @@ class _RatePill extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: cs.onSurface),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
               Icon(Icons.chevron_right_rounded, size: 18, color: cs.onSurfaceVariant),
             ],
           ),
@@ -347,15 +347,11 @@ class _AccentGrid extends StatelessWidget {
   const _AccentGrid({
     required this.cards,
     required this.columns,
-    required this.debtWe,
-    required this.debtCo,
     required this.onTap,
   });
 
   final List<HomeCard> cards;
   final int columns;
-  final String? debtWe;
-  final String? debtCo;
   final void Function(String route) onTap;
 
   @override
@@ -371,12 +367,11 @@ class _AccentGrid extends StatelessWidget {
         crossAxisCount: columns,
         crossAxisSpacing: 8,
         mainAxisSpacing: 8,
-        childAspectRatio: columns == 3 ? 0.88 : 1.02,
+        childAspectRatio: 1.0,
       ),
       itemCount: cards.length,
       itemBuilder: (ctx, i) {
         final card = cards[i];
-        final isDebts = card.route == '/debts' && card.label == 'Долги';
         final accent = card.color;
         return Material(
           color: Colors.transparent,
@@ -384,7 +379,7 @@ class _AccentGrid extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             onTap: () => onTap(card.route),
             child: Ink(
-              padding: EdgeInsets.fromLTRB(5, columns == 3 ? 10 : 12, 5, columns == 3 ? 8 : 10),
+              padding: const EdgeInsets.fromLTRB(6, 10, 6, 8),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: accent.withValues(alpha: 0.3)),
@@ -397,50 +392,19 @@ class _AccentGrid extends StatelessWidget {
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  SizedBox(
+                  Container(
                     width: 40,
                     height: 40,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        if (isDebts && (debtWe != null || debtCo != null))
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            child: Column(
-                              children: [
-                                if (debtWe != null)
-                                  Text(
-                                    debtWe!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Color(0xFFE11D48)),
-                                  ),
-                                if (debtCo != null)
-                                  Text(
-                                    debtCo!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Color(0xFF059669)),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(11),
-                            color: accent.withValues(alpha: 0.14),
-                            border: Border.all(color: accent.withValues(alpha: 0.4), width: 1.5),
-                            boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.18), blurRadius: 14, offset: const Offset(0, 6))],
-                          ),
-                          child: Icon(card.icon, size: 20, color: accent),
-                        ),
-                      ],
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(11),
+                      color: accent.withValues(alpha: 0.14),
+                      border: Border.all(color: accent.withValues(alpha: 0.4), width: 1.5),
+                      boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.18), blurRadius: 14, offset: const Offset(0, 6))],
                     ),
+                    child: Icon(card.icon, size: 20, color: accent),
                   ),
                   const SizedBox(height: 6),
                   Text(
@@ -451,7 +415,7 @@ class _AccentGrid extends StatelessWidget {
                     style: TextStyle(
                       fontSize: columns == 3 ? 11 : 13,
                       fontWeight: FontWeight.w700,
-                      height: 1.2,
+                      height: 1.15,
                       color: cs.onSurface,
                     ),
                   ),
@@ -497,7 +461,6 @@ class _ClientHome extends StatelessWidget {
           if (cards.isNotEmpty)
             _SellerMenuGrid(
               cards: cards,
-              debtCo: null,
               onTap: onNavigate,
             ),
           const SizedBox(height: 14),
@@ -521,8 +484,6 @@ class _SellerHome extends StatelessWidget {
     required this.user,
     required this.usdToTjs,
     required this.canSeeCourse,
-    required this.debtWe,
-    required this.debtCo,
     required this.onNavigate,
     required this.onRefresh,
   });
@@ -530,8 +491,6 @@ class _SellerHome extends StatelessWidget {
   final Map<String, dynamic> user;
   final double? usdToTjs;
   final bool canSeeCourse;
-  final String? debtWe;
-  final String? debtCo;
   final void Function(String route) onNavigate;
   final Future<void> Function() onRefresh;
 
@@ -551,14 +510,13 @@ class _SellerHome extends StatelessWidget {
             children: [
               if (canSeeCourse) ...[
                 _RatePill(value: usdToTjs, onTap: () => onNavigate('/course')),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
               ],
               _WelcomeHeader(name: sellerDisplayName(user), outlet: outlet),
               const SizedBox(height: 10),
               if (secondary.isNotEmpty)
                 _SellerMenuGrid(
                   cards: secondary,
-                  debtCo: debtCo,
                   onTap: onNavigate,
                 ),
             ],
@@ -646,9 +604,8 @@ class _WelcomeHeader extends StatelessWidget {
 }
 
 class _SellerMenuGrid extends StatelessWidget {
-  const _SellerMenuGrid({required this.cards, required this.debtCo, required this.onTap});
+  const _SellerMenuGrid({required this.cards, required this.onTap});
   final List<HomeCard> cards;
-  final String? debtCo;
   final void Function(String route) onTap;
 
   @override
@@ -668,7 +625,6 @@ class _SellerMenuGrid extends StatelessWidget {
         final tone = sellerCardTone(card.route);
         final gradient = sellerToneGradient(tone);
         final hint = kSellerHints[card.route];
-        final isDebts = card.route == '/debts' && card.label == 'Долги';
 
         return Material(
           color: Colors.transparent,
@@ -701,12 +657,9 @@ class _SellerMenuGrid extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(card.label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white)),
-                        if (hint != null || (isDebts && debtCo != null))
+                        if (hint != null)
                           Text(
-                            [
-                              if (isDebts && debtCo != null) debtCo,
-                              if (hint != null) hint,
-                            ].join(' · '),
+                            hint,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.white.withValues(alpha: 0.82)),

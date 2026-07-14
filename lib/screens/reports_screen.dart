@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
-import '../theme/app_shape.dart';
 import '../utils/number_format.dart';
 import '../utils/permissions.dart';
 import '../utils/report_analytics.dart';
@@ -18,6 +17,12 @@ const _blue = Color(0xFF2563EB);
 const _cardBg = Color(0xFF1A2438);
 const _heroGradientStart = Color(0xFF1A2438);
 const _heroGradientEnd = Color(0xFF151D2E);
+
+String _fmtDmY(DateTime d) {
+  final dd = d.day.toString().padLeft(2, '0');
+  final mm = d.month.toString().padLeft(2, '0');
+  return '$dd.$mm.${d.year}';
+}
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -159,14 +164,6 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
-  void _exportExcel() {
-    if (_data == null) {
-      _snack('Сначала дождитесь загрузки отчёта');
-      return;
-    }
-    _snack('Экспорт Excel доступен в веб-версии tojir.tj');
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!_hasWarehouse) return _buildNoWarehouse(context);
@@ -183,30 +180,22 @@ class _ReportsScreenState extends State<ReportsScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
           children: [
-            Text('Отчёт', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+            Text('Отчёт', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800, color: cs.onSurface)),
             const SizedBox(height: 4),
-            Row(
-              children: [
-                Icon(Icons.storefront_outlined, size: 14, color: muted),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '${_data?['warehouse_name'] ?? _user?['warehouse_name'] ?? 'Склад'} · $_periodLabel',
-                    style: TextStyle(fontSize: 13, color: muted),
-                  ),
-                ),
-              ],
+            Text(
+              '${_data?['warehouse_name'] ?? _user?['warehouse_name'] ?? 'Склад'} · $_periodLabel',
+              style: TextStyle(fontSize: 13, color: muted),
             ),
             const SizedBox(height: 12),
             _Toolbar(
               preset: _presetActive,
-              rangeLabel: '${fmtYmd(_range.start)} — ${fmtYmd(_range.end)}',
+              range: _range,
               onToday: () => _setRange(reportsTodayRange()),
               onWeek: () => _setRange(reportsIsoWeekRange()),
               onMonth: () => _setRange(reportsFullMonthRange()),
               onPickRange: _pickDateRange,
-              onExport: _exportExcel,
-              exportEnabled: _data != null && !_loading,
+              onPickStart: () => _pickSingleDate(isStart: true),
+              onPickEnd: () => _pickSingleDate(isStart: false),
             ),
             if (_loading)
               const SkeletonListBlock(rows: 10)
@@ -220,6 +209,26 @@ class _ReportsScreenState extends State<ReportsScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _pickSingleDate({required bool isStart}) async {
+    final initial = isStart ? _range.start : _range.end;
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      initialDate: initial,
+      locale: const Locale('ru'),
+    );
+    if (picked == null || !mounted) return;
+    final day = DateTime(picked.year, picked.month, picked.day);
+    if (isStart) {
+      final end = day.isAfter(_range.end) ? day : _range.end;
+      _setRange(DateTimeRange(start: day, end: end));
+    } else {
+      final start = day.isBefore(_range.start) ? day : _range.start;
+      _setRange(DateTimeRange(start: start, end: day));
+    }
   }
 
   Widget _buildNoWarehouse(BuildContext context) {
@@ -253,26 +262,28 @@ class _ReportsScreenState extends State<ReportsScreen> {
 class _Toolbar extends StatelessWidget {
   const _Toolbar({
     required this.preset,
-    required this.rangeLabel,
+    required this.range,
     required this.onToday,
     required this.onWeek,
     required this.onMonth,
     required this.onPickRange,
-    required this.onExport,
-    required this.exportEnabled,
+    required this.onPickStart,
+    required this.onPickEnd,
   });
 
   final ({bool today, bool week, bool month}) preset;
-  final String rangeLabel;
+  final DateTimeRange range;
   final VoidCallback onToday;
   final VoidCallback onWeek;
   final VoidCallback onMonth;
   final VoidCallback onPickRange;
-  final VoidCallback onExport;
-  final bool exportEnabled;
+  final VoidCallback onPickStart;
+  final VoidCallback onPickEnd;
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -289,34 +300,105 @@ class _Toolbar extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: Material(
-                color: _cardBg,
-                borderRadius: AppShape.br,
-                child: InkWell(
-                  onTap: onPickRange,
-                  borderRadius: AppShape.br,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    child: Row(
-                      children: [
-                        Expanded(child: Text(rangeLabel, style: const TextStyle(fontSize: 13))),
-                        Icon(Icons.calendar_today_outlined, size: 16, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55)),
-                      ],
-                    ),
-                  ),
-                ),
+              child: _DateField(
+                label: 'Начальная дата',
+                value: _fmtDmY(range.start),
+                onTap: onPickStart,
+                dark: dark,
+                muted: muted,
               ),
             ),
             const SizedBox(width: 8),
-            IconButton.filledTonal(
-              onPressed: exportEnabled ? onExport : null,
-              icon: const Icon(Icons.table_chart_outlined, size: 20),
-              visualDensity: VisualDensity.compact,
+            Expanded(
+              child: _DateField(
+                label: 'Конечная дата',
+                value: _fmtDmY(range.end),
+                onTap: onPickEnd,
+                dark: dark,
+                muted: muted,
+              ),
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onPickRange,
+            borderRadius: BorderRadius.circular(10),
+            child: Ink(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08)),
+                color: dark ? Colors.white.withValues(alpha: 0.03) : Colors.black.withValues(alpha: 0.02),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${_fmtDmY(range.start)} → ${_fmtDmY(range.end)}',
+                      style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface),
+                    ),
+                  ),
+                  Icon(Icons.calendar_month_rounded, size: 18, color: muted),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
       ],
+    );
+  }
+}
+
+class _DateField extends StatelessWidget {
+  const _DateField({
+    required this.label,
+    required this.value,
+    required this.onTap,
+    required this.dark,
+    required this.muted,
+  });
+
+  final String label;
+  final String value;
+  final VoidCallback onTap;
+  final bool dark;
+  final Color muted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08)),
+            color: dark ? _cardBg.withValues(alpha: 0.65) : Colors.white,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: TextStyle(fontSize: 10, color: muted)),
+                    const SizedBox(height: 2),
+                    Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+              Icon(Icons.calendar_today_outlined, size: 15, color: muted),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -356,7 +438,6 @@ class _ReportBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final flow = buildFlowAnalytics(data, usdToTjs);
     final cashflow = (data['cashflow_by_currency'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
-    final consolidated = buildConsolidatedItog(cashflow, usdToTjs);
     final daily = (data['daily_sales_tjs'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
     final salesByCurr = (data['sales_by_currency'] as Map?)?.cast<String, dynamic>() ?? const {};
     final retByCurr = (data['returns_by_currency'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -382,12 +463,10 @@ class _ReportBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (consolidated != null) ...[
-          _HeroCard(flow: flow, consolidated: consolidated, usdToTjs: usdToTjs),
-          const SizedBox(height: 12),
-        ],
+        _HeroCard(flow: flow, usdToTjs: usdToTjs),
+        const SizedBox(height: 12),
         if (flow.inflow > 0 || flow.outflow > 0) ...[
-          _StructureCard(flow: flow),
+          _StructureCard(flow: flow, usdToTjs: usdToTjs),
           const SizedBox(height: 12),
         ],
         _KpiGrid(
@@ -399,31 +478,35 @@ class _ReportBody extends StatelessWidget {
           usdToTjs: usdToTjs,
         ),
         const SizedBox(height: 12),
-        _CashflowCard(cashflow: cashflow),
-        if (daily.isNotEmpty) ...[
+        if (cashflow.isNotEmpty) ...[
+          _CashflowCard(cashflow: cashflow, usdToTjs: usdToTjs),
           const SizedBox(height: 12),
-          _DailySalesCard(daily: daily, maxDaily: maxDaily, dailyTotal: dailyTotal),
         ],
-        const SizedBox(height: 10),
+        if (daily.isNotEmpty) ...[
+          _DailySalesCard(daily: daily, maxDaily: maxDaily, dailyTotal: dailyTotal),
+          const SizedBox(height: 10),
+        ],
         _MobileBreakdownCard(
           title: 'По способу оплаты',
-          route: '/sales',
           rows: paymentRows.map((r) => _BreakdownRow(
             title: r['label']?.toString() ?? '—',
             amount: '${fmtReportNum(r['total'])} ${r['currency']}',
+            amountTjs: (r['_tjs'] as num?)?.toDouble(),
             percent: (r['percent'] as int?) ?? 0,
           )).toList(),
+          usdToTjs: usdToTjs,
         ),
         const SizedBox(height: 10),
         _MobileBreakdownCard(
           title: 'По магазинам',
-          route: '/sales',
           color: _heroGreen,
           rows: outletRows.map((r) => _BreakdownRow(
             title: r['outlet_name']?.toString() ?? '—',
             amount: '${fmtReportNum(r['total'])} ${r['currency']}',
+            amountTjs: (r['_tjs'] as num?)?.toDouble(),
             percent: (r['percent'] as int?) ?? 0,
           )).toList(),
+          usdToTjs: usdToTjs,
         ),
         const SizedBox(height: 10),
         _MobileBreakdownCard(
@@ -432,24 +515,30 @@ class _ReportBody extends StatelessWidget {
           rows: productRows.map((r) => _BreakdownRow(
             title: '#${r['rank']} ${r['name']}',
             amount: '${fmtReportNum(r['revenue'])} ${r['currency']}',
+            amountTjs: (r['_tjs'] as num?)?.toDouble(),
             percent: (r['percent'] as int?) ?? 0,
           )).toList(),
+          usdToTjs: usdToTjs,
         ),
+        if (usdToTjs != null && usdToTjs! > 0) ...[
+          const SizedBox(height: 12),
+          _RateCard(usdToTjs: usdToTjs!),
+        ],
       ],
     );
   }
 }
 
 class _HeroCard extends StatelessWidget {
-  const _HeroCard({required this.flow, required this.consolidated, this.usdToTjs});
+  const _HeroCard({required this.flow, this.usdToTjs});
 
   final ReportFlowAnalytics flow;
-  final ConsolidatedItog consolidated;
   final double? usdToTjs;
 
   @override
   Widget build(BuildContext context) {
-    final neg = consolidated.sum < 0;
+    final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65);
+    final neg = flow.net < 0;
     return Container(
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -457,108 +546,84 @@ class _HeroCard extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: [_heroGradientStart, _heroGradientEnd],
         ),
-        borderRadius: AppShape.br,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _blue.withValues(alpha: 0.25)),
       ),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Text('Итого за период (TJS)', style: TextStyle(fontSize: 13, color: muted)),
+          const SizedBox(height: 4),
+          Text(
+            '${fmtReportNum(flow.net)} TJS',
+            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: neg ? _heroRed : _heroGreen, height: 1.2),
+          ),
+          _FxLine(amount: flow.net, currency: 'TJS', usdToTjs: usdToTjs),
+          if (flow.inflow > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Маржа ${flow.marginPct}% от поступлений',
+              style: TextStyle(fontSize: 12, color: neg ? _heroRed : _heroGreen, fontWeight: FontWeight.w600),
+            ),
+          ],
+          const SizedBox(height: 12),
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Итого за период (TJS)',
-                      style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65)),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Icon(neg ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded, color: neg ? _heroRed : _heroGreen, size: 24),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            '${fmtReportNum(consolidated.sum)} TJS',
-                            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: neg ? _heroRed : _heroGreen, height: 1.2),
-                          ),
-                        ),
-                      ],
-                    ),
-                    _FxLine(amount: consolidated.sum, currency: 'TJS', usdToTjs: usdToTjs),
-                    if (flow.inflow > 0) ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: (flow.net >= 0 ? _heroGreen : _heroRed).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          'Маржа ${flow.marginPct}% от поступлений',
-                          style: TextStyle(fontSize: 12, color: flow.net >= 0 ? _heroGreen : _heroRed, fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ],
+                child: _FlowMiniCard(
+                  label: 'Поступило',
+                  value: '${fmtReportNum(flow.inflow)} TJS',
+                  amount: flow.inflow,
+                  usdToTjs: usdToTjs,
                 ),
               ),
-              const SizedBox(width: 12),
-              Column(
-                children: [
-                  _MiniStat(label: 'Поступило', value: '${fmtReportNum(flow.inflow)} TJS', icon: Icons.trending_up_rounded, iconColor: _heroGreen),
-                  const SizedBox(height: 10),
-                  _MiniStat(label: 'Списано', value: '${fmtReportNum(flow.outflow)} TJS', icon: Icons.trending_down_rounded, iconColor: const Color(0xFFF59E0B)),
-                ],
+              const SizedBox(width: 8),
+              Expanded(
+                child: _FlowMiniCard(
+                  label: 'Списано',
+                  value: '${fmtReportNum(flow.outflow)} TJS',
+                  amount: flow.outflow,
+                  usdToTjs: usdToTjs,
+                ),
               ),
             ],
           ),
-          if (consolidated.usdMissingRate && consolidated.hasUsd) ...[
-            const SizedBox(height: 8),
-            Text(
-              'USD не включён в итог — задайте курс в разделе «Курс».',
-              style: TextStyle(fontSize: 12, color: Colors.amber.shade400),
-            ),
-          ],
         ],
       ),
     );
   }
 }
 
-class _MiniStat extends StatelessWidget {
-  const _MiniStat({required this.label, required this.value, required this.icon, required this.iconColor});
+class _FlowMiniCard extends StatelessWidget {
+  const _FlowMiniCard({
+    required this.label,
+    required this.value,
+    required this.amount,
+    this.usdToTjs,
+  });
 
   final String label;
   final String value;
-  final IconData icon;
-  final Color iconColor;
+  final double amount;
+  final double? usdToTjs;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 160,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 9),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.2),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white.withValues(alpha: 0.04),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: iconColor, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55))),
-                Text(value, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-              ],
-            ),
-          ),
+          Text(label, style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55))),
+          const SizedBox(height: 2),
+          Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          _FxLine(amount: amount, currency: 'TJS', usdToTjs: usdToTjs),
         ],
       ),
     );
@@ -566,62 +631,70 @@ class _MiniStat extends StatelessWidget {
 }
 
 class _StructureCard extends StatelessWidget {
-  const _StructureCard({required this.flow});
+  const _StructureCard({required this.flow, this.usdToTjs});
 
   final ReportFlowAnalytics flow;
+  final double? usdToTjs;
 
   @override
   Widget build(BuildContext context) {
     return _ReportsCard(
       title: 'Структура за период',
-      icon: Icons.pie_chart_outline_rounded,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text('Поступления', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-          const SizedBox(height: 10),
-          _BreakdownBar(label: 'Продажи', value: fmtReportNum(flow.sales), suffix: 'TJS', percent: flow.salesPctOfInflow, color: _heroGreen),
-          _BreakdownBar(label: 'Оплаты долгов', value: fmtReportNum(flow.debtPay), suffix: 'TJS', percent: flow.debtPayPctOfInflow, color: const Color(0xFF3B82F6)),
-          const SizedBox(height: 12),
+          _BreakdownInline(label: 'Продажи', value: flow.sales, percent: flow.salesPctOfInflow, color: _heroGreen, usdToTjs: usdToTjs),
+          _BreakdownInline(label: 'Оплаты долгов', value: flow.debtPay, percent: flow.debtPayPctOfInflow, color: const Color(0xFF3B82F6), usdToTjs: usdToTjs),
+          const SizedBox(height: 8),
           const Text('Списания', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-          const SizedBox(height: 10),
-          _BreakdownBar(label: 'Расходы', value: fmtReportNum(flow.expenses), suffix: 'TJS', percent: flow.expensesPctOfOutflow, color: const Color(0xFFF59E0B)),
-          _BreakdownBar(label: 'Возвраты', value: fmtReportNum(flow.returns), suffix: 'TJS', percent: flow.returnsPctOfOutflow, color: _heroRed),
+          _BreakdownInline(label: 'Расходы', value: flow.expenses, percent: flow.expensesPctOfOutflow, color: const Color(0xFFF59E0B), usdToTjs: usdToTjs),
+          _BreakdownInline(label: 'Возвраты', value: flow.returns, percent: flow.returnsPctOfOutflow, color: _heroRed, usdToTjs: usdToTjs),
         ],
       ),
     );
   }
 }
 
-class _BreakdownBar extends StatelessWidget {
-  const _BreakdownBar({
+class _BreakdownInline extends StatelessWidget {
+  const _BreakdownInline({
     required this.label,
     required this.value,
-    required this.suffix,
     required this.percent,
     required this.color,
+    this.usdToTjs,
   });
 
   final String label;
-  final String value;
-  final String suffix;
+  final double value;
   final int percent;
   final Color color;
+  final double? usdToTjs;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(top: 8),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
               Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
-              Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              const SizedBox(width: 4),
-              Text(suffix, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5))),
-              const SizedBox(width: 6),
-              _PctTag(percent: percent, color: color),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(text: '${fmtReportNum(value)} TJS ', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                        TextSpan(text: '$percent%', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+                      ],
+                    ),
+                  ),
+                  _FxLine(amount: value, currency: 'TJS', usdToTjs: usdToTjs),
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 4),
@@ -758,26 +831,25 @@ class _KpiTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Material(
-      color: Theme.of(context).cardColor,
-      borderRadius: BorderRadius.circular(10),
+      color: Colors.transparent,
       child: InkWell(
         onTap: () => Navigator.of(context).pushNamed(route),
-        borderRadius: BorderRadius.circular(10),
-        child: Padding(
+        borderRadius: BorderRadius.circular(12),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+            color: dark ? _cardBg : Theme.of(context).cardColor,
+          ),
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 6),
-                  Expanded(child: Text(title, style: const TextStyle(fontSize: 12), maxLines: 2, overflow: TextOverflow.ellipsis)),
-                ],
-              ),
+              Text(title, style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55))),
               const SizedBox(height: 4),
-              Text(value, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, height: 1.2)),
+              Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, height: 1.2)),
               ?fx,
             ],
           ),
@@ -788,9 +860,10 @@ class _KpiTile extends StatelessWidget {
 }
 
 class _CashflowCard extends StatelessWidget {
-  const _CashflowCard({required this.cashflow});
+  const _CashflowCard({required this.cashflow, this.usdToTjs});
 
   final List<Map<String, dynamic>> cashflow;
+  final double? usdToTjs;
 
   @override
   Widget build(BuildContext context) {
@@ -821,6 +894,7 @@ class _CashflowCard extends StatelessWidget {
                       Text(fmtReportNum(r['balance']), style: TextStyle(fontWeight: FontWeight.w700, color: neg ? _heroRed : _heroGreen)),
                     ],
                   ),
+                  _FxLine(amount: r['balance'], currency: r['currency']?.toString(), usdToTjs: usdToTjs),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 8,
@@ -931,38 +1005,47 @@ class _DailySalesCard extends StatelessWidget {
 }
 
 class _BreakdownRow {
-  const _BreakdownRow({required this.title, required this.amount, required this.percent});
+  const _BreakdownRow({required this.title, required this.amount, required this.percent, this.amountTjs});
   final String title;
   final String amount;
   final int percent;
+  final double? amountTjs;
 }
 
 class _MobileBreakdownCard extends StatelessWidget {
-  const _MobileBreakdownCard({required this.title, required this.rows, this.route, this.color = _blue});
+  const _MobileBreakdownCard({
+    required this.title,
+    required this.rows,
+    this.color = _blue,
+    this.usdToTjs,
+  });
 
   final String title;
   final List<_BreakdownRow> rows;
-  final String? route;
   final Color color;
+  final double? usdToTjs;
 
   @override
   Widget build(BuildContext context) {
     final body = rows.isEmpty
-        ? Text('Нет данных', style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55)))
+        ? Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('Нет данных', style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55))),
+          )
         : Column(
             children: rows.map((r) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.only(top: 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Row(
                     children: [
                       Expanded(child: Text(r.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600))),
-                      _PctTag(percent: r.percent, color: color),
+                      Text('${r.percent}%', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
                     ],
                   ),
-                  const SizedBox(height: 4),
                   Text(r.amount, style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.75))),
+                  if (r.amountTjs != null) _FxLine(amount: r.amountTjs, currency: 'TJS', usdToTjs: usdToTjs),
                   const SizedBox(height: 4),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
@@ -978,16 +1061,7 @@ class _MobileBreakdownCard extends StatelessWidget {
             )).toList(),
           );
 
-    final card = _ReportsCard(title: title, child: body);
-    if (route == null) return card;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => Navigator.of(context).pushNamed(route!),
-        borderRadius: AppShape.br,
-        child: card,
-      ),
-    );
+    return _ReportsCard(title: title, child: body);
   }
 }
 
@@ -1000,26 +1074,67 @@ class _ReportsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).cardColor,
-        borderRadius: AppShape.br,
-        border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.35)),
+        color: dark ? _cardBg : Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-            child: Row(
-              children: [
-                if (icon != null) ...[Icon(icon, size: 16), const SizedBox(width: 8)],
-                Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14))),
-              ],
+          Row(
+            children: [
+              if (icon != null) ...[Icon(icon, size: 16), const SizedBox(width: 8)],
+              Expanded(child: Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14))),
+            ],
+          ),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _RateCard extends StatelessWidget {
+  const _RateCard({required this.usdToTjs});
+  final double usdToTjs;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: dark ? _cardBg : Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65)),
+                children: [
+                  const TextSpan(text: 'Курс для расчётов: '),
+                  TextSpan(text: '1 USD = ${fmtReportNum(usdToTjs)} TJS', style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+                ],
+              ),
             ),
           ),
-          Divider(height: 1, color: Theme.of(context).dividerColor.withValues(alpha: 0.35)),
-          Padding(padding: const EdgeInsets.all(12), child: child),
+          TextButton(
+            onPressed: () => Navigator.of(context).pushNamed('/exchange-rate'),
+            style: TextButton.styleFrom(
+              foregroundColor: _blue,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Изменить курс', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
         ],
       ),
     );
@@ -1027,15 +1142,15 @@ class _ReportsCard extends StatelessWidget {
 }
 
 class _FxLine extends StatelessWidget {
-  const _FxLine({required this.amount, required this.currency, this.usdToTjs});
+  const _FxLine({required this.amount, this.currency, this.usdToTjs});
 
   final dynamic amount;
-  final String currency;
+  final String? currency;
   final double? usdToTjs;
 
   @override
   Widget build(BuildContext context) {
-    final cur = currency.trim().toUpperCase();
+    final cur = (currency ?? 'TJS').trim().toUpperCase();
     final n = amount is num ? amount.toDouble() : parseReportBalance(amount);
     if (n == null || n == 0 || usdToTjs == null || usdToTjs! <= 0) return const SizedBox.shrink();
     String? text;

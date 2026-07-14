@@ -57,8 +57,8 @@ class ApiClient {
       responseType: ResponseType.plain,
       connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(seconds: 45),
-      // 4xx обрабатываем в экранах; 5xx — как ошибка сети.
-      validateStatus: (status) => status != null && status < 500,
+      // 4xx/5xx как обычный ответ — иначе Dio кидает DioException и App Review видит стек.
+      validateStatus: (status) => status != null && status < 600,
     ));
 
     if (!kIsWeb) {
@@ -195,8 +195,12 @@ class ApiClient {
   }
 
   Future<http.Response> get(String path, {bool withAuth = true}) async {
-    final res = await _dio.get(_cleanUrl(path));
-    return _toHttpResponse(res);
+    try {
+      final res = await _dio.get(_cleanUrl(path));
+      return _toHttpResponse(res);
+    } on DioException catch (e) {
+      return _dioErrorToResponse(e);
+    }
   }
 
   Future<http.Response> post(
@@ -204,8 +208,12 @@ class ApiClient {
     Map<String, dynamic>? body,
     bool withAuth = true,
   }) async {
-    final res = await _dio.post(_cleanUrl(path), data: body == null ? null : jsonEncode(body));
-    return _toHttpResponse(res);
+    try {
+      final res = await _dio.post(_cleanUrl(path), data: body == null ? null : jsonEncode(body));
+      return _toHttpResponse(res);
+    } on DioException catch (e) {
+      return _dioErrorToResponse(e);
+    }
   }
 
   Future<http.Response> patch(
@@ -213,13 +221,30 @@ class ApiClient {
     Map<String, dynamic>? body,
     bool withAuth = true,
   }) async {
-    final res = await _dio.patch(_cleanUrl(path), data: body == null ? null : jsonEncode(body));
-    return _toHttpResponse(res);
+    try {
+      final res = await _dio.patch(_cleanUrl(path), data: body == null ? null : jsonEncode(body));
+      return _toHttpResponse(res);
+    } on DioException catch (e) {
+      return _dioErrorToResponse(e);
+    }
   }
 
   Future<http.Response> delete(String path, {bool withAuth = true}) async {
-    final res = await _dio.delete(_cleanUrl(path));
-    return _toHttpResponse(res);
+    try {
+      final res = await _dio.delete(_cleanUrl(path));
+      return _toHttpResponse(res);
+    } on DioException catch (e) {
+      return _dioErrorToResponse(e);
+    }
+  }
+
+  http.Response _dioErrorToResponse(DioException e) {
+    final status = e.response?.statusCode;
+    if (status != null) {
+      return http.Response(e.response?.data?.toString() ?? '', status);
+    }
+    // Сеть / таймаут — без стека DioException для пользователя.
+    throw Exception('Нет связи с сервером. Проверьте интернет и попробуйте снова.');
   }
 
   /// Обновить access token (при старте и после возврата из фона).

@@ -14,6 +14,7 @@ import '../utils/permissions.dart';
 import '../utils/product_scan_utils.dart';
 import '../utils/tj_phone.dart';
 import '../widgets/app_scaffold.dart';
+import '../widgets/quick_date_range_chips.dart';
 
 const _salesMobilePageSize = 10;
 
@@ -57,23 +58,52 @@ class _SalesScreenState extends State<SalesScreen> {
   // History
   String historySearch = '';
   DateTimeRange? historyRange;
+  String? historyPreset = 'month';
   int? filterOutletId;
   bool showTrash = false;
   List<Map<String, dynamic>> sales = const [];
 
   String mobileViewTab = 'sale';
   int historyMobilePage = 1;
+  final Set<String> expandedReceiptKeys = <String>{};
   final _saleScanCtrl = TextEditingController();
   final _historySearchCtrl = TextEditingController();
+  final _productSearchCtrl = TextEditingController();
+  final _productSearchFocus = FocusNode();
   final _scrollCtrl = ScrollController();
   final _checkoutKey = GlobalKey();
   String checkoutCurrency = 'TJS';
   int? deletingId;
 
+  String productQuery = '';
+  bool productBrowseOpen = false;
+
   Map<String, dynamic>? get _user => context.read<SessionController>().user;
 
   List<Map<String, dynamic>> get _availableOutletProducts =>
       outletProducts.where((p) => (_asDouble(p['quantity']) ?? 0) > 0).toList();
+
+  List<Map<String, dynamic>> get _browseProducts {
+    final s = productQuery.trim().toLowerCase();
+    final available = _availableOutletProducts;
+    final filtered = s.isEmpty
+        ? available
+        : available.where((p) {
+            bool hit(dynamic v) => (v ?? '').toString().toLowerCase().contains(s);
+            return hit(p['product_name']) ||
+                hit(p['name']) ||
+                hit(p['model']) ||
+                hit(p['product_model']) ||
+                hit(p['brand']) ||
+                hit(p['product_brand']) ||
+                hit(p['sku']) ||
+                hit(p['product_sku']) ||
+                hit(p['barcode']) ||
+                hit(p['imei']);
+          }).toList();
+    if (filtered.length <= 250) return filtered;
+    return filtered.sublist(0, 250);
+  }
 
   bool _showStorePicker(Map<String, dynamic> u) => u['role'] != 'seller' || outlets.length > 1;
 
@@ -92,6 +122,7 @@ class _SalesScreenState extends State<SalesScreen> {
   @override
   void initState() {
     super.initState();
+    _productSearchFocus.addListener(_onProductSearchFocus);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final u = _user;
       final args = ModalRoute.of(context)?.settings.arguments;
@@ -110,15 +141,44 @@ class _SalesScreenState extends State<SalesScreen> {
       if (presetOutlet != null) {
         setState(() => saleOutletId = presetOutlet);
       }
+      if (historyRange == null) {
+        setState(() {
+          historyPreset = 'month';
+          historyRange = _historyRangeForPreset('month');
+        });
+      }
       await _loadRate();
       await _loadOutlets();
       await _loadHistory();
     });
   }
 
+  void _onProductSearchFocus() {
+    if (_productSearchFocus.hasFocus) {
+      if (!productBrowseOpen) setState(() => productBrowseOpen = true);
+      return;
+    }
+    Future<void>.delayed(const Duration(milliseconds: 200), () {
+      if (!mounted || _productSearchFocus.hasFocus) return;
+      if (productBrowseOpen) setState(() => productBrowseOpen = false);
+    });
+  }
+
+  void _resetProductBrowse() {
+    productQuery = '';
+    productBrowseOpen = false;
+    _productSearchCtrl.clear();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _productSearchFocus.unfocus();
+    });
+  }
+
   @override
   void dispose() {
     _smsTimer?.cancel();
+    _productSearchFocus.removeListener(_onProductSearchFocus);
+    _productSearchFocus.dispose();
+    _productSearchCtrl.dispose();
     _saleScanCtrl.dispose();
     _historySearchCtrl.dispose();
     _scrollCtrl.dispose();
@@ -427,9 +487,32 @@ class _SalesScreenState extends State<SalesScreen> {
     }
   }
 
+  DateTimeRange _historyRangeForPreset(String key) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    switch (key) {
+      case 'today':
+        return DateTimeRange(start: today, end: today);
+      case 'week':
+        return DateTimeRange(start: today.subtract(const Duration(days: 6)), end: today);
+      case 'month':
+      default:
+        return DateTimeRange(start: today.subtract(const Duration(days: 29)), end: today);
+    }
+  }
+
+  void _applyHistoryPreset(String key) {
+    setState(() {
+      historyPreset = key;
+      historyRange = _historyRangeForPreset(key);
+      historyMobilePage = 1;
+    });
+    _loadHistory();
+  }
+
   Future<void> _pickHistoryDateRange() async {
     final now = DateTime.now();
-    final initial = historyRange ?? DateTimeRange(start: now.subtract(const Duration(days: 30)), end: now);
+    final initial = historyRange ?? _historyRangeForPreset('month');
     final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2020),
@@ -440,8 +523,37 @@ class _SalesScreenState extends State<SalesScreen> {
       confirmText: 'ОК',
     );
     if (picked == null || !mounted) return;
-    setState(() => historyRange = picked);
+    setState(() {
+      historyPreset = 'custom';
+      historyRange = picked;
+    });
     await _loadHistory();
+  }
+
+  Future<void> _openScanCodeDialog() async {
+    final ctrl = TextEditingController(text: _saleScanCtrl.text);
+    final code = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Сканер'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'QR, штрих-код, IMEI'),
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Za-z\-./:?=&%+\s]'))],
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.of(ctx).pop(ctrl.text), child: const Text('Найти')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (code == null || !mounted) return;
+    _saleScanCtrl.text = code;
+    _handleSaleScan(code);
   }
 
   Future<void> _loadHistory() async {
@@ -502,6 +614,11 @@ class _SalesScreenState extends State<SalesScreen> {
       smsCode = '';
       smsCooldownSec = 0;
       _smsTimer?.cancel();
+      productBrowseOpen = true;
+    });
+    // Keep search focused so the product list stays open (like web).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _productSearchFocus.requestFocus();
     });
   }
 
@@ -834,24 +951,6 @@ class _SalesScreenState extends State<SalesScreen> {
     reasonCtrl.dispose();
   }
 
-  Future<void> _openProductPicker() async {
-    final outletId = saleOutletId;
-    if (outletId == null) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _ProductPickerSheet(
-        products: outletProducts,
-        selectedIds: selectedProductIds,
-        onPick: (pid) {
-          Navigator.of(ctx).pop();
-          _addProduct(pid);
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final u = context.watch<SessionController>().user;
@@ -870,7 +969,9 @@ class _SalesScreenState extends State<SalesScreen> {
     final showStore = _showStorePicker(u);
     final isBusinessman = u['role'] == 'businessman' || u['role'] == 'platform';
     final stickyBar = mobileViewTab == 'sale' && selectedProductIds.isNotEmpty;
-    final historySlice = sales.skip((historyMobilePage - 1) * _salesMobilePageSize).take(_salesMobilePageSize).toList();
+    final historyReceipts = _groupSalesIntoReceipts(sales);
+    final historyTotalPages = historyReceipts.isEmpty ? 1 : (historyReceipts.length / _salesMobilePageSize).ceil();
+    final historySlice = historyReceipts.skip((historyMobilePage - 1) * _salesMobilePageSize).take(_salesMobilePageSize).toList();
 
     return AppScaffold(
       child: SafeArea(
@@ -887,17 +988,18 @@ class _SalesScreenState extends State<SalesScreen> {
                 controller: _scrollCtrl,
                 padding: EdgeInsets.fromLTRB(12, 10, 12, stickyBar ? 88 : 14),
                 children: [
-                  Text('Продажа', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: cs.onSurface, height: 1.2)),
-                  const SizedBox(height: 10),
+                  Text('Продажа', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: cs.onSurface, height: 1.2)),
+                  const SizedBox(height: 4),
                   _SalesMobileTabs(
                     active: mobileViewTab,
                     cartCount: selectedProductIds.length,
+                    historyCount: historyReceipts.length,
                     onSale: () => setState(() => mobileViewTab = 'sale'),
                     onHistory: () => setState(() => mobileViewTab = 'history'),
                   ),
+                  const SizedBox(height: 10),
                   if (mobileViewTab == 'sale') ...[
-                    _Card(
-                      title: 'Оформить продажу',
+                    _SectionCard(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -906,124 +1008,56 @@ class _SalesScreenState extends State<SalesScreen> {
                             const SizedBox(height: 10),
                           ],
                           if (showStore) ...[
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _OutletDropdown(
-                                    outlets: outlets,
-                                    value: saleOutletId,
-                                    loading: loadingOutlets,
-                                    allowClear: !(u['role'] == 'seller' && outlets.length <= 1),
-                                    onChanged: (id) async {
-                                      setState(() => saleOutletId = id);
-                                      if (id != null) await _loadOutletProducts(id);
-                                    },
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                _DateBtn(value: saleDate, onPick: (d) => setState(() => saleDate = d)),
-                              ],
-                            ),
-                          ] else
-                            _DateBtn(value: saleDate, onPick: (d) => setState(() => saleDate = d)),
-                          if (saleOutletId == null) ...[
-                            const SizedBox(height: 10),
-                            Text('Выберите магазин', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
-                          ] else ...[
-                            const SizedBox(height: 10),
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(14),
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [
-                                    const Color(0xFF2563EB).withValues(alpha: 0.14),
-                                    (dark ? const Color(0xFF0F172A) : cs.surfaceContainer).withValues(alpha: 0.55),
-                                  ],
-                                ),
-                                border: Border.all(color: const Color(0xFF60A5FA).withValues(alpha: 0.28)),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(Icons.qr_code_2_rounded, size: 18, color: Color(0xFFBFDBFE)),
-                                      const SizedBox(width: 8),
-                                      Text('Сканер', style: TextStyle(fontWeight: FontWeight.w600, color: dark ? const Color(0xFFBFDBFE) : cs.primary)),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextField(
-                                          controller: _saleScanCtrl,
-                                          decoration: const InputDecoration(
-                                            isDense: true,
-                                            hintText: 'Сканируйте QR, штрих-код, IMEI',
-                                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                          ),
-                                          keyboardType: TextInputType.number,
-                                          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Za-z\-./:?=&%+\s]'))],
-                                          onSubmitted: _handleSaleScan,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      SizedBox(
-                                        height: 44,
-                                        width: 44,
-                                        child: FilledButton(
-                                          onPressed: () => _handleSaleScan(_saleScanCtrl.text),
-                                          style: FilledButton.styleFrom(padding: EdgeInsets.zero, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                                          child: const Icon(Icons.center_focus_weak_rounded, size: 22),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
+                            Text('Магазин', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                            const SizedBox(height: 4),
+                            _OutletDropdown(
+                              outlets: outlets,
+                              value: saleOutletId,
+                              loading: loadingOutlets,
+                              allowClear: !(u['role'] == 'seller' && outlets.length <= 1),
+                              onChanged: (id) async {
+                                setState(() {
+                                  saleOutletId = id;
+                                  selectedProductIds.clear();
+                                  edits.clear();
+                                  _resetProductBrowse();
+                                });
+                                if (id != null) await _loadOutletProducts(id);
+                              },
                             ),
                             const SizedBox(height: 10),
-                            Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(12),
-                                onTap: loadingProducts ? null : _openProductPicker,
-                                child: Ink(
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(12),
-                                    color: dark ? Colors.white.withValues(alpha: 0.04) : cs.surfaceContainerHighest,
-                                    border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08)),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.search_rounded, size: 20, color: cs.onSurfaceVariant),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Text(
-                                          loadingProducts ? 'Загрузка…' : (u['role'] == 'seller' ? 'Найти товар…' : 'Поиск по названию, артикулу, коду…'),
-                                          style: TextStyle(fontSize: 14, color: cs.onSurfaceVariant),
-                                        ),
-                                      ),
-                                      Icon(Icons.expand_more_rounded, size: 22, color: cs.onSurfaceVariant),
-                                    ],
-                                  ),
-                                ),
-                              ),
+                          ],
+                          if (saleOutletId == null)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Text('Выберите магазин', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+                            )
+                          else ...[
+                            _SalesFindBar(
+                              controller: _productSearchCtrl,
+                              focusNode: _productSearchFocus,
+                              loading: loadingProducts,
+                              onChanged: (v) => setState(() {
+                                productQuery = v;
+                                productBrowseOpen = true;
+                              }),
+                              onClear: () => setState(() {
+                                productQuery = '';
+                                _productSearchCtrl.clear();
+                                productBrowseOpen = true;
+                              }),
+                              onScanTap: _openScanCodeDialog,
                             ),
-                            if (selectedProductIds.isEmpty) ...[
+                            if (selectedProductIds.isNotEmpty) ...[
                               const SizedBox(height: 10),
-                              _SalesEmptyHint(
-                                loading: loadingOutlets || loadingProducts,
-                                noOutlet: saleOutletId == null,
-                                hasProducts: _availableOutletProducts.isNotEmpty,
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'В ЧЕКЕ',
+                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.4, color: cs.onSurfaceVariant.withValues(alpha: 0.9)),
+                                ),
                               ),
-                            ] else ...[
-                              const SizedBox(height: 10),
+                              const SizedBox(height: 8),
                               for (final pid in selectedProductIds)
                                 _SaleLineCard(
                                   dark: dark,
@@ -1037,6 +1071,26 @@ class _SalesScreenState extends State<SalesScreen> {
                                   onPriceChanged: (p) => setState(() => edits[pid] = edits[pid]!.copyWith(unitPriceTjs: p)),
                                   onCurrencyChanged: (c) => setState(() => edits[pid] = edits[pid]!.copyWith(currency: c)),
                                 ),
+                            ],
+                            if (productBrowseOpen) ...[
+                              const SizedBox(height: 10),
+                              _SalesProductPanel(
+                                loading: loadingProducts,
+                                query: productQuery,
+                                items: _browseProducts,
+                                availableCount: _availableOutletProducts.length,
+                                selectedIds: selectedProductIds,
+                                onPick: _addProduct,
+                              ),
+                            ] else if (selectedProductIds.isEmpty) ...[
+                              const SizedBox(height: 4),
+                              _SalesEmptyHint(
+                                loading: loadingOutlets || loadingProducts,
+                                noOutlet: saleOutletId == null,
+                                hasProducts: _availableOutletProducts.isNotEmpty,
+                              ),
+                            ],
+                            if (selectedProductIds.isNotEmpty) ...[
                               const SizedBox(height: 10),
                               KeyedSubtree(
                                 key: _checkoutKey,
@@ -1092,8 +1146,7 @@ class _SalesScreenState extends State<SalesScreen> {
                     ),
                   ],
                   if (mobileViewTab == 'history') ...[
-                    _Card(
-                      title: 'История продаж',
+                    _SectionCard(
                       child: Column(
                         children: [
                           _SalesHistoryFilters(
@@ -1103,69 +1156,79 @@ class _SalesScreenState extends State<SalesScreen> {
                             onSearch: (v) {
                               historySearch = v;
                               setState(() => historyMobilePage = 1);
+                            },
+                            onFind: () {
+                              historySearch = _historySearchCtrl.text;
+                              setState(() => historyMobilePage = 1);
                               _loadHistory();
                             },
+                            onRefresh: _loadHistory,
+                            onApply: () {
+                              historySearch = _historySearchCtrl.text;
+                              setState(() => historyMobilePage = 1);
+                              _loadHistory();
+                            },
+                            preset: historyPreset,
+                            onPreset: _applyHistoryPreset,
                             range: historyRange,
                             onPickRange: _pickHistoryDateRange,
-                            onClearRange: () {
-                              setState(() => historyRange = null);
-                              _loadHistory();
-                            },
                             showStore: showStore,
                             outlets: outlets,
                             outletId: filterOutletId,
                             allowOutletClear: !(u['role'] == 'seller' && outlets.length <= 1),
-                            onOutletChanged: (id) {
-                              setState(() => filterOutletId = id);
-                              _loadHistory();
-                            },
+                            onOutletChanged: (id) => setState(() => filterOutletId = id),
                             showTrash: showTrash,
-                            onTrashChanged: (v) {
-                              setState(() => showTrash = v);
-                              _loadHistory();
-                            },
+                            onTrashChanged: (v) => setState(() => showTrash = v),
                           ),
-                          const SizedBox(height: 10),
-                          if (loadingHistory && sales.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 20),
-                              child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary))),
-                            )
-                          else
-                            _SaleHistoryMobileList(
-                              dark: dark,
-                              cs: cs,
-                              rows: historySlice,
-                              showStore: showStore,
-                              showTrash: showTrash,
-                              deletingId: deletingId,
-                              onEdit: _openEditSale,
-                              onReturn: _openReturnSale,
-                              onDelete: _onDeleteSale,
-                              onRestore: _restoreSale,
-                            ),
-                          if (!loadingHistory && sales.length > _salesMobilePageSize) ...[
-                            const SizedBox(height: 10),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                IconButton(
-                                  onPressed: historyMobilePage > 1 ? () => setState(() => historyMobilePage--) : null,
-                                  icon: const Icon(Icons.chevron_left_rounded),
-                                ),
-                                Text('$historyMobilePage / ${(sales.length / _salesMobilePageSize).ceil()}'),
-                                IconButton(
-                                  onPressed: historyMobilePage * _salesMobilePageSize < sales.length
-                                      ? () => setState(() => historyMobilePage++)
-                                      : null,
-                                  icon: const Icon(Icons.chevron_right_rounded),
-                                ),
-                              ],
-                            ),
-                          ],
                         ],
                       ),
                     ),
+                    const SizedBox(height: 4),
+                    if (loadingHistory && sales.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary))),
+                      )
+                    else
+                      _SaleHistoryReceiptList(
+                        dark: dark,
+                        cs: cs,
+                        receipts: historySlice,
+                        expandedKeys: expandedReceiptKeys,
+                        showStore: showStore,
+                        showTrash: showTrash,
+                        deletingId: deletingId,
+                        onToggle: (key) => setState(() {
+                          if (expandedReceiptKeys.contains(key)) {
+                            expandedReceiptKeys.remove(key);
+                          } else {
+                            expandedReceiptKeys.add(key);
+                          }
+                        }),
+                        onEdit: _openEditSale,
+                        onReturn: _openReturnSale,
+                        onDelete: _onDeleteSale,
+                        onRestore: _restoreSale,
+                      ),
+                    if (!loadingHistory && historyReceipts.length > _salesMobilePageSize) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            onPressed: historyMobilePage > 1 ? () => setState(() => historyMobilePage--) : null,
+                            icon: const Icon(Icons.chevron_left_rounded),
+                          ),
+                          Text('$historyMobilePage / $historyTotalPages'),
+                          IconButton(
+                            onPressed: historyMobilePage < historyTotalPages
+                                ? () => setState(() => historyMobilePage++)
+                                : null,
+                            icon: const Icon(Icons.chevron_right_rounded),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ],
               ),
@@ -1189,28 +1252,268 @@ class _SalesScreenState extends State<SalesScreen> {
 
 }
 
-class _Card extends StatelessWidget {
-  const _Card({required this.title, required this.child});
-  final String title;
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({required this.child});
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: AppBrand.cardDecoration(context),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: child,
+    );
+  }
+}
+
+class _SalesFindBar extends StatelessWidget {
+  const _SalesFindBar({
+    required this.controller,
+    required this.focusNode,
+    required this.loading,
+    required this.onChanged,
+    required this.onClear,
+    required this.onScanTap,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool loading;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+  final VoidCallback onScanTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Container(
+      height: 52,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF60A5FA).withValues(alpha: 0.32)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF2563EB).withValues(alpha: 0.16),
+            (dark ? const Color(0xFF0F172A) : Colors.white).withValues(alpha: dark ? 0.55 : 0.9),
+          ],
+        ),
+        boxShadow: [BoxShadow(color: const Color(0xFF2563EB).withValues(alpha: 0.12), blurRadius: 18, offset: const Offset(0, 6))],
+      ),
+      child: Row(
         children: [
-          Container(
-            height: 36,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            alignment: Alignment.centerLeft,
-            decoration: BoxDecoration(border: Border(bottom: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.25)))),
-            child: Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: cs.onSurface)),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: TextField(
+                controller: controller,
+                focusNode: focusNode,
+                enabled: !loading,
+                onChanged: onChanged,
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Theme.of(context).colorScheme.onSurface),
+                cursorColor: const Color(0xFF60A5FA),
+                decoration: InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                  filled: false,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+                  prefixIcon: Icon(Icons.search_rounded, size: 20, color: dark ? const Color(0xFFBFDBFE) : AppBrand.primaryBlue),
+                  prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                  hintText: loading ? 'Загрузка…' : 'Найти товар',
+                  hintStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: muted),
+                  suffixIcon: controller.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Очистить',
+                          onPressed: onClear,
+                          icon: Icon(Icons.close_rounded, size: 18, color: muted),
+                        ),
+                ),
+              ),
+            ),
           ),
-          Padding(padding: const EdgeInsets.fromLTRB(12, 10, 12, 10), child: child),
+          Container(width: 1, height: double.infinity, color: const Color(0xFF60A5FA).withValues(alpha: 0.28)),
+          Material(
+            color: const Color(0xFF2563EB).withValues(alpha: 0.35),
+            borderRadius: const BorderRadius.horizontal(right: Radius.circular(15)),
+            child: InkWell(
+              borderRadius: const BorderRadius.horizontal(right: Radius.circular(15)),
+              onTap: onScanTap,
+              child: const SizedBox(
+                width: 64,
+                height: 52,
+                child: Icon(Icons.qr_code_scanner_rounded, color: Colors.white, size: 22),
+              ),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _SalesProductPanel extends StatelessWidget {
+  const _SalesProductPanel({
+    required this.loading,
+    required this.query,
+    required this.items,
+    required this.availableCount,
+    required this.selectedIds,
+    required this.onPick,
+  });
+
+  final bool loading;
+  final String query;
+  final List<Map<String, dynamic>> items;
+  final int availableCount;
+  final Set<int> selectedIds;
+  final ValueChanged<int> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final label = query.trim().isEmpty ? 'Товары' : 'Найдено';
+    final count = items.isEmpty ? '' : ' · ${items.length}';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '$label$count'.toUpperCase(),
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.4,
+            color: cs.onSurfaceVariant.withValues(alpha: 0.9),
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (loading && items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 28),
+            child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary))),
+          )
+        else if (items.isEmpty)
+          _SalesEmptyHint(
+            loading: false,
+            noOutlet: false,
+            hasProducts: availableCount > 0,
+            emptySearch: availableCount > 0,
+          )
+        else
+          Column(
+            children: [
+              for (var i = 0; i < items.length; i++) ...[
+                if (i > 0) const SizedBox(height: 8),
+                _SalesProductRow(
+                  product: items[i],
+                  inCart: selectedIds.contains(_asInt(items[i]['product_id'])),
+                  onPick: onPick,
+                ),
+              ],
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _SalesProductRow extends StatelessWidget {
+  const _SalesProductRow({
+    required this.product,
+    required this.inCart,
+    required this.onPick,
+  });
+
+  final Map<String, dynamic> product;
+  final bool inCart;
+  final ValueChanged<int> onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final cs = Theme.of(context).colorScheme;
+    final pid = _asInt(product['product_id']);
+    final name = (product['product_name'] ?? product['name'] ?? '—').toString();
+    final sub = _productSubline(product);
+    final price = _asDouble(product['sale_price']) ?? 0;
+    final qty = _asDouble(product['quantity']) ?? 0;
+    final border = inCart
+        ? const Color(0xFF22C55E).withValues(alpha: 0.35)
+        : (dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.08));
+    final bg = inCart
+        ? LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              const Color(0xFF22C55E).withValues(alpha: 0.1),
+              dark ? const Color(0xFF0F172A).withValues(alpha: 0.55) : Colors.white.withValues(alpha: 0.7),
+            ],
+          )
+        : null;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: pid == null ? null : () => onPick(pid),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: border),
+            gradient: bg,
+            color: bg == null ? (dark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.02)) : null,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: cs.onSurface, height: 1.25)),
+                      if (sub != null) ...[
+                        const SizedBox(height: 2),
+                        Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                      ],
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Text(
+                            formatRuMoney(price, suffix: 'смн'),
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF93C5FD)),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'ост. ${qty == qty.roundToDouble() ? qty.toInt() : qty}',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF93C5FD)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    color: inCart ? const Color(0xFF22C55E).withValues(alpha: 0.9) : const Color(0xFF2563EB).withValues(alpha: 0.85),
+                  ),
+                  child: Icon(inCart ? Icons.check_rounded : Icons.add_rounded, color: Colors.white, size: 22),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1238,7 +1541,6 @@ class _OutletDropdown extends StatelessWidget {
       initialValue: value,
       isExpanded: true,
       decoration: InputDecoration(
-        labelText: 'Магазин',
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         suffixIcon: loading ? const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))) : null,
       ),
@@ -1256,113 +1558,70 @@ class _OutletDropdown extends StatelessWidget {
   }
 }
 
-class _DateBtn extends StatelessWidget {
-  const _DateBtn({required this.value, required this.onPick});
-  final DateTime value;
-  final ValueChanged<DateTime> onPick;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return OutlinedButton.icon(
-      style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        visualDensity: VisualDensity.standard,
-      ),
-      onPressed: () async {
-        final picked = await showDatePicker(
-          context: context,
-          firstDate: DateTime(2020),
-          lastDate: DateTime.now().add(const Duration(days: 365)),
-          initialDate: value,
-        );
-        if (picked != null) onPick(picked);
-      },
-      icon: const Icon(Icons.calendar_month_rounded, size: 18),
-      label: Text(_fmtYmd(value), style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w800)),
-    );
-  }
-}
-
 class _SalesMobileTabs extends StatelessWidget {
   const _SalesMobileTabs({
     required this.active,
     required this.cartCount,
+    required this.historyCount,
     required this.onSale,
     required this.onHistory,
   });
 
   final String active;
   final int cartCount;
+  final int historyCount;
   final VoidCallback onSale;
   final VoidCallback onHistory;
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Row(
-      children: [
-        Expanded(child: _SalesTabButton(label: 'Оформить', active: active == 'sale', badge: cartCount, onTap: onSale, dark: dark)),
-        const SizedBox(width: 8),
-        Expanded(child: _SalesTabButton(label: 'История', active: active == 'history', onTap: onHistory, dark: dark)),
-      ],
-    );
-  }
-}
-
-class _SalesTabButton extends StatelessWidget {
-  const _SalesTabButton({
-    required this.label,
-    required this.active,
-    required this.onTap,
-    required this.dark,
-    this.badge = 0,
-  });
-
-  final String label;
-  final bool active;
-  final int badge;
-  final VoidCallback onTap;
-  final bool dark;
-
-  @override
-  Widget build(BuildContext context) {
-    final inactiveBorder = dark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.08);
-    final inactiveBg = dark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.03);
-    final inactiveFg = dark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF475569);
-    return Material(
-      color: active ? AppBrand.primaryBlue.withValues(alpha: dark ? 0.22 : 0.12) : inactiveBg,
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
+    final cs = Theme.of(context).colorScheme;
+    Widget tab(String id, String label, VoidCallback onTap) {
+      final selected = active == id;
+      return InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 44),
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: active ? AppBrand.primaryBlue.withValues(alpha: 0.55) : inactiveBorder),
-            boxShadow: active ? [BoxShadow(color: AppBrand.primaryBlue.withValues(alpha: 0.2), blurRadius: 14, offset: const Offset(0, 4))] : null,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+        child: Padding(
+          padding: const EdgeInsets.only(right: 20, top: 8, bottom: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: active ? (dark ? const Color(0xFFF1F5F9) : AppBrand.primaryBlue) : inactiveFg)),
-              if (badge > 0) ...[
-                const SizedBox(width: 6),
-                Container(
-                  constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  decoration: BoxDecoration(color: AppBrand.primaryBlue, borderRadius: BorderRadius.circular(999)),
-                  alignment: Alignment.center,
-                  child: Text('$badge', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: selected ? AppBrand.primaryBlue : cs.onSurfaceVariant,
                 ),
-              ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                height: 2.5,
+                width: 56,
+                decoration: BoxDecoration(
+                  color: selected ? AppBrand.primaryBlue : Colors.transparent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
             ],
           ),
         ),
-      ),
+      );
+    }
+
+    final saleLabel = cartCount > 0 ? 'Товары ($cartCount)' : 'Товары';
+    final historyLabel = historyCount > 0 ? 'История ($historyCount)' : 'История';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            tab('sale', saleLabel, onSale),
+            tab('history', historyLabel, onHistory),
+          ],
+        ),
+        Container(height: 1, color: cs.outlineVariant.withValues(alpha: 0.35)),
+      ],
     );
   }
 }
@@ -1373,9 +1632,13 @@ class _SalesHistoryFilters extends StatelessWidget {
     required this.dark,
     required this.searchCtrl,
     required this.onSearch,
+    required this.onFind,
+    required this.onRefresh,
+    required this.onApply,
+    required this.preset,
+    required this.onPreset,
     required this.range,
     required this.onPickRange,
-    required this.onClearRange,
     required this.showStore,
     required this.outlets,
     required this.outletId,
@@ -1389,9 +1652,13 @@ class _SalesHistoryFilters extends StatelessWidget {
   final bool dark;
   final TextEditingController searchCtrl;
   final ValueChanged<String> onSearch;
+  final VoidCallback onFind;
+  final Future<void> Function() onRefresh;
+  final VoidCallback onApply;
+  final String? preset;
+  final ValueChanged<String> onPreset;
   final DateTimeRange? range;
   final VoidCallback onPickRange;
-  final VoidCallback onClearRange;
   final bool showStore;
   final List<Map<String, dynamic>> outlets;
   final int? outletId;
@@ -1406,28 +1673,55 @@ class _SalesHistoryFilters extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(
-          controller: searchCtrl,
-          decoration: InputDecoration(
-            hintText: 'Поиск по товару',
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            suffixIcon: IconButton(
-              icon: const Icon(Icons.search_rounded, size: 20),
-              onPressed: () => onSearch(searchCtrl.text),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: searchCtrl,
+                decoration: const InputDecoration(
+                  hintText: 'Поиск по товару',
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+                onChanged: onSearch,
+                onSubmitted: (_) => onFind(),
+              ),
             ),
-          ),
-          onChanged: onSearch,
-          onSubmitted: onSearch,
+            const SizedBox(width: 8),
+            FilledButton.tonalIcon(
+              onPressed: onFind,
+              icon: const Icon(Icons.search_rounded, size: 18),
+              label: const Text('Найти'),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: () => onRefresh(),
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Обновить'),
+          ),
+        ),
+        const SizedBox(height: 10),
+        QuickDateRangeChips(
+          colorScheme: cs,
+          selected: preset == 'custom' ? null : preset,
+          showPeriod: false,
+          onToday: () => onPreset('today'),
+          onWeek: () => onPreset('week'),
+          onMonth: () => onPreset('month'),
+          onPeriod: onPickRange,
+        ),
+        const SizedBox(height: 10),
         Material(
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(10),
             onTap: onPickRange,
             child: Ink(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: fieldBorder),
@@ -1437,32 +1731,16 @@ class _SalesHistoryFilters extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      range != null ? _fmtYmd(range!.start) : 'Дата от',
+                      range != null ? '${_fmtYmd(range!.start)} → ${_fmtYmd(range!.end)}' : 'Начальная дата → Конечная дата',
                       style: TextStyle(fontSize: 13, color: range != null ? cs.onSurface : cs.onSurfaceVariant),
                     ),
                   ),
-                  Icon(Icons.arrow_forward_rounded, size: 14, color: cs.onSurfaceVariant.withValues(alpha: 0.7)),
-                  Expanded(
-                    child: Text(
-                      range != null ? _fmtYmd(range!.end) : 'Дата до',
-                      textAlign: TextAlign.end,
-                      style: TextStyle(fontSize: 13, color: range != null ? cs.onSurface : cs.onSurfaceVariant),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
                   Icon(Icons.calendar_month_rounded, size: 18, color: cs.onSurfaceVariant),
                 ],
               ),
             ),
           ),
         ),
-        if (range != null) ...[
-          const SizedBox(height: 4),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(onPressed: onClearRange, child: const Text('Сбросить даты')),
-          ),
-        ],
         if (showStore) ...[
           const SizedBox(height: 8),
           DropdownButtonFormField<int>(
@@ -1471,7 +1749,7 @@ class _SalesHistoryFilters extends StatelessWidget {
             isExpanded: true,
             decoration: const InputDecoration(
               isDense: true,
-              labelText: 'Магазин (все)',
+              hintText: 'Все магазины',
               contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
             items: [
@@ -1499,6 +1777,18 @@ class _SalesHistoryFilters extends StatelessWidget {
             const SizedBox(width: 8),
             Text('В корзине', style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
           ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton(
+            onPressed: onApply,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 44),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Применить фильтры', style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
         ),
       ],
     );
@@ -1582,33 +1872,95 @@ class _SellerContextBanner extends StatelessWidget {
 }
 
 class _SalesEmptyHint extends StatelessWidget {
-  const _SalesEmptyHint({required this.loading, required this.noOutlet, required this.hasProducts});
+  const _SalesEmptyHint({
+    required this.loading,
+    required this.noOutlet,
+    required this.hasProducts,
+    this.emptySearch = false,
+  });
 
   final bool loading;
   final bool noOutlet;
   final bool hasProducts;
+  final bool emptySearch;
 
   @override
   Widget build(BuildContext context) {
-    final text = loading
-        ? 'Загрузка…'
-        : noOutlet
-            ? 'Выберите магазин'
-            : hasProducts
-                ? 'Выберите товар или отсканируйте код'
-                : 'В этом магазине нет товаров в наличии';
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.shopping_cart_outlined, size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
-          const SizedBox(width: 8),
-          Flexible(child: Text(text, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant))),
-        ],
+    final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final String title;
+    final String? sub;
+    if (loading) {
+      title = 'Загрузка…';
+      sub = null;
+    } else if (noOutlet) {
+      title = 'Выберите магазин';
+      sub = null;
+    } else if (emptySearch) {
+      title = 'Ничего не найдено';
+      sub = 'Попробуйте другое название или камеру';
+    } else if (hasProducts) {
+      title = 'Корзина пуста';
+      sub = 'Нажмите поиск или камеру';
+    } else {
+      title = 'Нет товаров';
+      sub = 'В этом магазине нет товаров в наличии';
+    }
+
+    return CustomPaint(
+      painter: _DashedRRectPainter(
+        color: dark ? Colors.white.withValues(alpha: 0.18) : Colors.black.withValues(alpha: 0.14),
+        radius: 12,
+      ),
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(minHeight: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.shopping_cart_outlined, size: 28, color: AppBrand.primaryBlue.withValues(alpha: 0.8)),
+            const SizedBox(height: 8),
+            Text(title, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: cs.onSurface)),
+            if (sub != null) ...[
+              const SizedBox(height: 4),
+              Text(sub, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
+            ],
+          ],
+        ),
       ),
     );
   }
+}
+
+class _DashedRRectPainter extends CustomPainter {
+  _DashedRRectPainter({required this.color, required this.radius});
+  final Color color;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    final rrect = RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(radius));
+    final path = Path()..addRRect(rrect);
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      const dash = 5.0;
+      const gap = 4.0;
+      while (distance < metric.length) {
+        final next = distance + dash;
+        canvas.drawPath(metric.extractPath(distance, next.clamp(0, metric.length)), paint);
+        distance = next + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedRRectPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.radius != radius;
 }
 
 class _SaleLineCard extends StatelessWidget {
@@ -2208,14 +2560,16 @@ class _PaymentSelector extends StatelessWidget {
   }
 }
 
-class _SaleHistoryMobileList extends StatelessWidget {
-  const _SaleHistoryMobileList({
+class _SaleHistoryReceiptList extends StatelessWidget {
+  const _SaleHistoryReceiptList({
     required this.dark,
     required this.cs,
-    required this.rows,
+    required this.receipts,
+    required this.expandedKeys,
     required this.showStore,
     required this.showTrash,
     required this.deletingId,
+    required this.onToggle,
     required this.onEdit,
     required this.onReturn,
     required this.onDelete,
@@ -2224,10 +2578,12 @@ class _SaleHistoryMobileList extends StatelessWidget {
 
   final bool dark;
   final ColorScheme cs;
-  final List<Map<String, dynamic>> rows;
+  final List<_SaleReceipt> receipts;
+  final Set<String> expandedKeys;
   final bool showStore;
   final bool showTrash;
   final int? deletingId;
+  final ValueChanged<String> onToggle;
   final ValueChanged<Map<String, dynamic>> onEdit;
   final ValueChanged<Map<String, dynamic>> onReturn;
   final ValueChanged<Map<String, dynamic>> onDelete;
@@ -2235,7 +2591,7 @@ class _SaleHistoryMobileList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (rows.isEmpty) {
+    if (receipts.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8),
         child: Text('Нет продаж', textAlign: TextAlign.center, style: TextStyle(color: cs.onSurfaceVariant)),
@@ -2244,30 +2600,171 @@ class _SaleHistoryMobileList extends StatelessWidget {
 
     return Column(
       children: [
-        for (final r in rows)
-          _SaleHistoryMobileCard(
+        for (final receipt in receipts)
+          _SaleHistoryReceiptCard(
             dark: dark,
             cs: cs,
-            record: r,
+            receipt: receipt,
+            expanded: expandedKeys.contains(receipt.key),
             showStore: showStore,
             showTrash: showTrash,
-            deleting: deletingId == _asInt(r['id']),
-            onEdit: () => onEdit(r),
-            onReturn: () => onReturn(r),
-            onDelete: () => onDelete(r),
-            onRestore: () => onRestore(r),
+            deletingId: deletingId,
+            onToggle: () => onToggle(receipt.key),
+            onEdit: onEdit,
+            onReturn: onReturn,
+            onDelete: onDelete,
+            onRestore: onRestore,
           ),
       ],
     );
   }
 }
 
-class _SaleHistoryMobileCard extends StatelessWidget {
-  const _SaleHistoryMobileCard({
+class _SaleHistoryReceiptCard extends StatelessWidget {
+  const _SaleHistoryReceiptCard({
+    required this.dark,
+    required this.cs,
+    required this.receipt,
+    required this.expanded,
+    required this.showStore,
+    required this.showTrash,
+    required this.deletingId,
+    required this.onToggle,
+    required this.onEdit,
+    required this.onReturn,
+    required this.onDelete,
+    required this.onRestore,
+  });
+
+  final bool dark;
+  final ColorScheme cs;
+  final _SaleReceipt receipt;
+  final bool expanded;
+  final bool showStore;
+  final bool showTrash;
+  final int? deletingId;
+  final VoidCallback onToggle;
+  final ValueChanged<Map<String, dynamic>> onEdit;
+  final ValueChanged<Map<String, dynamic>> onReturn;
+  final ValueChanged<Map<String, dynamic>> onDelete;
+  final ValueChanged<Map<String, dynamic>> onRestore;
+
+  @override
+  Widget build(BuildContext context) {
+    final multi = receipt.count > 1;
+    final border = expanded
+        ? const Color(0xFF22C55E).withValues(alpha: 0.35)
+        : multi
+            ? const Color(0xFF60A5FA).withValues(alpha: 0.28)
+            : (dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.06));
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: dark ? AppBrand.darkCard : cs.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onToggle,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            multi ? 'Чек · ${receipt.count} товара' : receipt.title,
+                            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: cs.onSurface, height: 1.25),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            [
+                              receipt.datetime,
+                              if (showStore) receipt.outletName,
+                              receipt.payment,
+                            ].join(' · '),
+                            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                          ),
+                          if (!expanded && multi) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              [
+                                ...receipt.items.take(3).map((it) => (it['product_name'] ?? 'Товар').toString()),
+                                if (receipt.count > 3) '+${receipt.count - 3}',
+                              ].join(' · '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 12, color: const Color(0xFF93C5FD).withValues(alpha: 0.9)),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          receipt.total > 0 ? '${formatRuMoney(receipt.total)} смн' : '—',
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: Color(0xFF86EFAC), height: 1.2),
+                        ),
+                        const SizedBox(height: 6),
+                        Icon(
+                          expanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                          size: 18,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+              child: Column(
+                children: [
+                  for (var i = 0; i < receipt.items.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 8),
+                    _SaleHistoryLineCard(
+                      dark: dark,
+                      cs: cs,
+                      record: receipt.items[i],
+                      showTrash: showTrash,
+                      deleting: deletingId == _asInt(receipt.items[i]['id']),
+                      onEdit: () => onEdit(receipt.items[i]),
+                      onReturn: () => onReturn(receipt.items[i]),
+                      onDelete: () => onDelete(receipt.items[i]),
+                      onRestore: () => onRestore(receipt.items[i]),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SaleHistoryLineCard extends StatelessWidget {
+  const _SaleHistoryLineCard({
     required this.dark,
     required this.cs,
     required this.record,
-    required this.showStore,
     required this.showTrash,
     required this.deleting,
     required this.onEdit,
@@ -2279,7 +2776,6 @@ class _SaleHistoryMobileCard extends StatelessWidget {
   final bool dark;
   final ColorScheme cs;
   final Map<String, dynamic> record;
-  final bool showStore;
   final bool showTrash;
   final bool deleting;
   final VoidCallback onEdit;
@@ -2293,7 +2789,6 @@ class _SaleHistoryMobileCard extends StatelessWidget {
     final ret = _asDouble(record['total_returned']) ?? 0;
     final status = _getSaleReturnStatus(record);
     final lineTotal = _getSaleLineTotal(record);
-    final currency = (record['currency'] as String?) ?? 'TJS';
     final isFullReturn = qty > 0 && ret >= qty;
     final sub = _productSubline(record);
 
@@ -2309,10 +2804,9 @@ class _SaleHistoryMobileCard extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
       decoration: BoxDecoration(
-        color: bg ?? (dark ? AppBrand.darkRow : cs.surfaceContainer),
+        color: bg ?? (dark ? const Color(0xFF0F172A).withValues(alpha: 0.55) : cs.surfaceContainerHighest),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: border ?? (dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06))),
       ),
@@ -2326,8 +2820,14 @@ class _SaleHistoryMobileCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text((record['product_name'] ?? '—').toString(), style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: cs.onSurface, height: 1.3)),
-                    if (sub != null) Text(sub, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                    Text(
+                      (record['product_name'] ?? '—').toString(),
+                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: cs.onSurface, height: 1.25),
+                    ),
+                    if (sub != null) ...[
+                      const SizedBox(height: 2),
+                      Text(sub, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                    ],
                   ],
                 ),
               ),
@@ -2335,8 +2835,14 @@ class _SaleHistoryMobileCard extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (showTrash) ...[
-                    IconButton(tooltip: 'Восстановить', onPressed: onRestore, icon: const Icon(Icons.undo_rounded, size: 20)),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Восстановить',
+                      onPressed: onRestore,
+                      icon: const Icon(Icons.undo_rounded, size: 20),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: 'Удалить навсегда',
                       onPressed: deleting ? null : onDelete,
                       icon: deleting
@@ -2344,9 +2850,20 @@ class _SaleHistoryMobileCard extends StatelessWidget {
                           : const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFEF4444)),
                     ),
                   ] else ...[
-                    IconButton(tooltip: 'Изменить', onPressed: isFullReturn ? null : onEdit, icon: const Icon(Icons.edit_outlined, size: 20)),
-                    IconButton(tooltip: isFullReturn ? 'Уже возврат' : 'Возврат', onPressed: isFullReturn ? null : onReturn, icon: const Icon(Icons.undo_rounded, size: 20)),
                     IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Изменить',
+                      onPressed: isFullReturn ? null : onEdit,
+                      icon: const Icon(Icons.edit_outlined, size: 20),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      tooltip: isFullReturn ? 'Уже возврат' : 'Возврат',
+                      onPressed: isFullReturn ? null : onReturn,
+                      icon: const Icon(Icons.undo_rounded, size: 20),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
                       tooltip: 'Удалить',
                       onPressed: deleting ? null : onDelete,
                       icon: deleting
@@ -2377,40 +2894,38 @@ class _SaleHistoryMobileCard extends StatelessWidget {
           ],
           const SizedBox(height: 8),
           Container(
-            width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
-              color: const Color(0xFF22C55E).withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: const Color(0xFF22C55E).withValues(alpha: 0.25)),
+              color: const Color(0xFF22C55E).withValues(alpha: 0.12),
             ),
             child: Text(
-              lineTotal > 0
-                  ? '${formatRuMoney(lineTotal, fractionDigits: lineTotal % 1 == 0 ? 0 : 2)} $currency'
-                  : '—',
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 17, color: Color(0xFF86EFAC), height: 1.25),
+              lineTotal > 0 ? '${formatRuMoney(lineTotal)} смн' : '—',
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 17, color: Color(0xFF86EFAC)),
             ),
           ),
           const SizedBox(height: 8),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 6,
-            crossAxisSpacing: 6,
-            childAspectRatio: 2.35,
+          Row(
             children: [
-              _MetaPair(dark: dark, label: 'Дата', value: _formatSaleDateTime(record)),
-              if (showStore) _MetaPair(dark: dark, label: 'Магазин', value: (record['outlet_name'] ?? '—').toString()),
-              _MetaPair(
-                dark: dark,
-                label: 'Кол-во',
-                value: ret > 0 ? '${ret.toStringAsFixed(ret % 1 == 0 ? 0 : 3)} / ${qty.toStringAsFixed(qty % 1 == 0 ? 0 : 3)} возврат' : qty.toString(),
+              Expanded(
+                child: _MetaPair(
+                  dark: dark,
+                  label: 'Кол-во',
+                  value: ret > 0
+                      ? '${_fmtQty(ret)} / ${_fmtQty(qty)} возврат'
+                      : _fmtQty(qty),
+                ),
               ),
-              _MetaPair(
-                dark: dark,
-                label: 'Цена',
-                value: record['unit_price'] != null ? '${formatRuInt((_asDouble(record['unit_price']) ?? 0).round())} $currency' : '—',
+              const SizedBox(width: 6),
+              Expanded(
+                child: _MetaPair(
+                  dark: dark,
+                  label: 'Цена',
+                  value: record['unit_price'] != null
+                      ? '${formatRuMoney(_asDouble(record['unit_price']) ?? 0)} смн'
+                      : '—',
+                ),
               ),
             ],
           ),
@@ -2437,18 +2952,16 @@ class _MetaPair extends StatelessWidget {
         color: dark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.03),
         border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.06)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label, style: TextStyle(fontSize: 11, color: labelColor, height: 1.2)),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              value,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: valueColor, height: 1.25),
-            ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: valueColor, height: 1.25),
           ),
         ],
       ),
@@ -2456,83 +2969,26 @@ class _MetaPair extends StatelessWidget {
   }
 }
 
-class _ProductPickerSheet extends StatefulWidget {
-  const _ProductPickerSheet({required this.products, required this.selectedIds, required this.onPick});
-  final List<Map<String, dynamic>> products;
-  final Set<int> selectedIds;
-  final ValueChanged<int> onPick;
+class _SaleReceipt {
+  const _SaleReceipt({
+    required this.key,
+    required this.items,
+    required this.total,
+    required this.title,
+    required this.count,
+    required this.datetime,
+    required this.payment,
+    required this.outletName,
+  });
 
-  @override
-  State<_ProductPickerSheet> createState() => _ProductPickerSheetState();
-}
-
-class _ProductPickerSheetState extends State<_ProductPickerSheet> {
-  String q = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final cs = Theme.of(context).colorScheme;
-    final available = widget.products.where((p) => (_asDouble(p['quantity']) ?? 0) > 0);
-    final items = available.where((p) {
-      final name = (p['product_name'] ?? p['name'] ?? '').toString().toLowerCase();
-      final model = (p['model'] ?? '').toString().toLowerCase();
-      final sku = (p['sku'] ?? '').toString().toLowerCase();
-      final s = q.trim().toLowerCase();
-      if (s.isEmpty) return true;
-      return name.contains(s) || model.contains(s) || sku.contains(s);
-    }).take(250).toList();
-
-    return Container(
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHigh,
-        borderRadius: AppShape.sheetTop,
-      ),
-      padding: EdgeInsets.only(
-        left: 14,
-        right: 14,
-        top: 12,
-        bottom: 14 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(width: 36, height: 3, decoration: AppShape.sheetHandle(Colors.white.withValues(alpha: dark ? 0.14 : 0.22))),
-          const SizedBox(height: 12),
-          TextField(
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: 'Поиск по названию, модели, артикулу…', isDense: true),
-            onChanged: (v) => setState(() => q = v),
-            autofocus: true,
-          ),
-          const SizedBox(height: 10),
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: items.length,
-              separatorBuilder: (_, _) => Divider(height: 1, color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
-              itemBuilder: (ctx, i) {
-                final p = items[i];
-                final pid = _asInt(p['product_id']);
-                if (pid == null) return const SizedBox.shrink();
-                final name = (p['product_name'] ?? p['name'] ?? '—').toString();
-                final model = (p['model'] ?? '').toString();
-                final sku = (p['sku'] ?? '').toString();
-                final sub = [model, sku].where((x) => x.trim().isNotEmpty).join(' · ');
-                final selected = widget.selectedIds.contains(pid);
-                return ListTile(
-                  dense: true,
-                  title: Text(name, style: TextStyle(fontWeight: FontWeight.w900, color: cs.onSurface)),
-                  subtitle: sub.isEmpty ? null : Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: selected ? const Icon(Icons.check_circle_rounded, color: Color(0xFF22C55E)) : const Icon(Icons.add_circle_outline_rounded),
-                  onTap: () => widget.onPick(pid),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  final String key;
+  final List<Map<String, dynamic>> items;
+  final double total;
+  final String title;
+  final int count;
+  final String datetime;
+  final String payment;
+  final String outletName;
 }
 
 class _LineEdit {
@@ -2611,8 +3067,87 @@ String _getSaleReturnStatus(Map<String, dynamic> record) {
 
 double _getSaleLineTotal(Map<String, dynamic> record) {
   final qty = _asDouble(record['quantity']) ?? 0;
+  final ret = _asDouble(record['total_returned']) ?? 0;
   final price = _asDouble(record['unit_price']) ?? 0;
-  return qty * price;
+  final remain = qty - ret;
+  if (remain <= 0) return 0;
+  return (remain * price * 100).round() / 100;
+}
+
+String _fmtQty(double n) {
+  if (n == n.roundToDouble()) return n.toInt().toString();
+  return n.toStringAsFixed(3).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+}
+
+String _paymentLabel(String? method) {
+  switch (method) {
+    case 'card':
+      return 'Карта';
+    case 'nasiya':
+      return 'Насия';
+    case 'partial':
+      return 'Частично';
+    default:
+      return 'Наличные';
+  }
+}
+
+String _receiptGroupKey(Map<String, dynamic> record) {
+  final batch = (record['checkout_batch_id'] ?? '').toString().trim();
+  if (batch.isNotEmpty) return 'b:$batch';
+  final createdRaw = record['created_at'];
+  String created;
+  if (createdRaw != null) {
+    final d = DateTime.tryParse(createdRaw.toString());
+    if (d != null) {
+      final y = d.year.toString().padLeft(4, '0');
+      final m = d.month.toString().padLeft(2, '0');
+      final day = d.day.toString().padLeft(2, '0');
+      final hh = d.hour.toString().padLeft(2, '0');
+      final mm = d.minute.toString().padLeft(2, '0');
+      created = '$y-$m-$day $hh:$mm';
+    } else {
+      created = createdRaw.toString();
+    }
+  } else {
+    final sold = (record['sold_at'] ?? '').toString();
+    created = sold.length >= 10 ? sold.substring(0, 10) : sold;
+  }
+  return [
+    'f',
+    created,
+    record['outlet'] ?? record['outlet_id'] ?? '',
+    record['payment_method'] ?? 'cash',
+    record['buyer_phone'] ?? '',
+    record['created_by'] ?? '',
+  ].join('|');
+}
+
+List<_SaleReceipt> _groupSalesIntoReceipts(List<Map<String, dynamic>> rows) {
+  final map = <String, List<Map<String, dynamic>>>{};
+  for (final r in rows) {
+    final key = _receiptGroupKey(r);
+    map.putIfAbsent(key, () => <Map<String, dynamic>>[]).add(r);
+  }
+  return map.entries.map((e) {
+    final sorted = [...e.value]..sort((a, b) => (_asInt(a['id']) ?? 0).compareTo(_asInt(b['id']) ?? 0));
+    final first = sorted.first;
+    final total = sorted.fold<double>(0, (sum, it) => sum + _getSaleLineTotal(it));
+    final names = sorted.map((it) => (it['product_name'] ?? 'Товар').toString()).where((n) => n.isNotEmpty).toList();
+    final title = names.length <= 2
+        ? names.join(', ')
+        : '${names.first} и ещё ${names.length - 1}';
+    return _SaleReceipt(
+      key: e.key,
+      items: sorted,
+      total: (total * 100).round() / 100,
+      title: title.isEmpty ? 'Товар' : title,
+      count: sorted.length,
+      datetime: _formatSaleDateTime(first),
+      payment: _paymentLabel(first['payment_method']?.toString()),
+      outletName: (first['outlet_name'] ?? '—').toString(),
+    );
+  }).toList();
 }
 
 String _fillSmsTemplate(String key, Map<String, String> vars) {

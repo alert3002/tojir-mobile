@@ -44,6 +44,7 @@ import 'utils/platform_info.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 import 'utils/permissions.dart';
+import 'widgets/app_update_checker.dart';
 import 'widgets/businessman_section_gate.dart';
 import 'widgets/skeleton_loading.dart';
 
@@ -153,7 +154,8 @@ class _SessionGate extends StatefulWidget {
   State<_SessionGate> createState() => _SessionGateState();
 }
 
-class _SessionGateState extends State<_SessionGate> with WidgetsBindingObserver {
+class _SessionGateState extends State<_SessionGate>
+    with WidgetsBindingObserver, AppUpdateChecker {
   @override
   void initState() {
     super.initState();
@@ -168,6 +170,7 @@ class _SessionGateState extends State<_SessionGate> with WidgetsBindingObserver 
       if (isIosApp) {
         IapService.instance.init(context.read<ApiClient>());
       }
+      scheduleAppUpdateCheck();
     });
   }
 
@@ -181,6 +184,7 @@ class _SessionGateState extends State<_SessionGate> with WidgetsBindingObserver 
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       context.read<SessionController>().resumeFromBackground();
+      scheduleAppUpdateCheck();
     }
   }
 
@@ -237,6 +241,8 @@ class _BusinessmanWarehouseSetupShell extends StatefulWidget {
 }
 
 class _BusinessmanWarehouseSetupShellState extends State<_BusinessmanWarehouseSetupShell> {
+  final GlobalKey<ProfileScreenState> _profileKey = GlobalKey<ProfileScreenState>();
+
   @override
   void initState() {
     super.initState();
@@ -251,7 +257,13 @@ class _BusinessmanWarehouseSetupShellState extends State<_BusinessmanWarehouseSe
             'Укажите название и адрес склада в профиле. До этого остальные разделы приложения недоступны — видны только ваши данные после привязки склада.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Понятно')),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _profileKey.currentState?.focusWarehouseFields();
+              },
+              child: const Text('Понятно'),
+            ),
           ],
         ),
       );
@@ -259,5 +271,8 @@ class _BusinessmanWarehouseSetupShellState extends State<_BusinessmanWarehouseSe
   }
 
   @override
-  Widget build(BuildContext context) => const ProfileScreen();
+  Widget build(BuildContext context) => ProfileScreen(
+        key: _profileKey,
+        focusWarehouse: true,
+      );
 }

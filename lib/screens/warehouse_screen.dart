@@ -7,7 +7,6 @@ import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
-import '../theme/app_brand.dart';
 import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
 import '../widgets/app_scaffold.dart';
@@ -48,8 +47,10 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
   bool loadingProducts = false;
 
   int? selectedWarehouseId;
+  int? selectedOutletId;
   final TextEditingController searchCtrl = TextEditingController();
   String search = '';
+  String sortKey = 'name';
   bool hideZero = true;
   bool showTrash = false;
   String brandFilter = '';
@@ -189,7 +190,10 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
   Future<void> _loadOutlets() async {
     final wid = selectedWarehouseId ?? _asInt(_user?['warehouse']);
     if (wid == null) {
-      setState(() => warehouseOutlets = const []);
+      setState(() {
+        warehouseOutlets = const [];
+        selectedOutletId = null;
+      });
       return;
     }
     try {
@@ -199,7 +203,12 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
         final d = jsonDecode(res.body);
         final list = d is List ? d : (d is Map ? (d['results'] ?? d['data']) : null);
         final items = (list is List) ? list.cast<Map<String, dynamic>>() : <Map<String, dynamic>>[];
-        setState(() => warehouseOutlets = items);
+        setState(() {
+          warehouseOutlets = items;
+          if (selectedOutletId != null && !items.any((o) => _asInt(o['id']) == selectedOutletId)) {
+            selectedOutletId = null;
+          }
+        });
       }
     } catch (_) {
       if (mounted) setState(() => warehouseOutlets = const []);
@@ -217,7 +226,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
       final qp = <String, String>{'warehouse': wid.toString()};
       if (search.trim().isNotEmpty) qp['search'] = search.trim();
       if (brandFilter.trim().isNotEmpty) qp['brand'] = brandFilter.trim();
-      if (selectedCategoryId != null) qp['category'] = selectedCategoryId.toString();
+      if (selectedOutletId != null) qp['outlet'] = selectedOutletId.toString();
+      if (sortKey.isNotEmpty && sortKey != 'name') qp['ordering'] = sortKey;
       if (showTrash) {
         qp['trash'] = '1';
       } else if (hideZero) {
@@ -252,6 +262,44 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     }
   }
 
+  List<Map<String, dynamic>> _sortedProducts(bool canSeeWarehouseQty) {
+    final arr = [...products];
+    double stockOf(Map<String, dynamic> p) {
+      if (selectedOutletId != null) return _asDouble(p['outlet_stock_quantity']) ?? 0;
+      final stores = ((p['outlets_summary'] as List?)?.cast<Map<String, dynamic>>() ?? const [])
+          .fold<double>(0, (s, o) => s + (_asDouble(o['quantity']) ?? 0));
+      final wh = canSeeWarehouseQty ? (_asDouble(p['quantity']) ?? 0) : 0;
+      return wh + stores;
+    }
+
+    String nameOf(Map<String, dynamic> p) => (p['name'] ?? '').toString().toLowerCase();
+    double soldOf(Map<String, dynamic> p) => _asDouble(p['sold_qty']) ?? 0;
+    int idOf(Map<String, dynamic> p) => _asInt(p['id']) ?? 0;
+
+    arr.sort((a, b) {
+      var d = 0;
+      switch (sortKey) {
+        case 'stock_asc':
+          d = stockOf(a).compareTo(stockOf(b));
+        case 'stock_desc':
+          d = stockOf(b).compareTo(stockOf(a));
+        case 'sold_asc':
+          d = soldOf(a).compareTo(soldOf(b));
+        case 'sold_desc':
+          d = soldOf(b).compareTo(soldOf(a));
+        case 'new':
+          d = idOf(b).compareTo(idOf(a));
+        case 'old':
+          d = idOf(a).compareTo(idOf(b));
+        default:
+          d = nameOf(a).compareTo(nameOf(b));
+      }
+      if (d != 0) return d;
+      return nameOf(a).compareTo(nameOf(b));
+    });
+    return arr;
+  }
+
   WarehouseStats? _warehouseStats() {
     if (showTrash) return null;
     var warehouseQty = 0.0;
@@ -261,8 +309,21 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
       final wq = _asDouble(p['quantity']) ?? 0;
       warehouseQty += wq;
       if (wq > 0 && wq <= 5) lowStock++;
-      final summary = (p['outlets_summary'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
-      storeQty += summary.fold<double>(0, (s, o) => s + (_asDouble(o['quantity']) ?? 0));
+      if (selectedOutletId != null) {
+        storeQty += _asDouble(p['outlet_stock_quantity']) ?? 0;
+      } else {
+        final summary = (p['outlets_summary'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
+        storeQty += summary.fold<double>(0, (s, o) => s + (_asDouble(o['quantity']) ?? 0));
+      }
+    }
+    String? storeLabel;
+    if (selectedOutletId != null) {
+      for (final o in warehouseOutlets) {
+        if (_asInt(o['id']) == selectedOutletId) {
+          storeLabel = (o['name'] ?? '').toString();
+          break;
+        }
+      }
     }
     return WarehouseStats(
       positions: products.length,
@@ -270,6 +331,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
       storeQty: storeQty.round(),
       lowStock: lowStock,
       stores: warehouseOutlets.length,
+      storeLabel: storeLabel,
     );
   }
 
@@ -598,13 +660,22 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
     }
 
     final hasFixedWarehouse = u['warehouse'] != null;
-    final maxS = _subscriptionMaxStores;
     final isSeller = u['role'] == 'seller';
     final canManageStores = !isSeller;
     final canSeeTrash = !isSeller;
     final canSeeWarehouseQty = !isSeller;
     final stats = _warehouseStats();
-    final mobileSlice = products.skip((mobilePage - 1) * _warehouseMobilePageSize).take(_warehouseMobilePageSize).toList();
+    final sorted = _sortedProducts(canSeeWarehouseQty);
+    final mobileSlice = sorted.skip((mobilePage - 1) * _warehouseMobilePageSize).take(_warehouseMobilePageSize).toList();
+    const sortOptions = <(String, String)>[
+      ('name', 'По имени'),
+      ('stock_asc', 'Остаток: мало → много'),
+      ('stock_desc', 'Остаток: много → мало'),
+      ('sold_desc', 'Продажи: больше'),
+      ('sold_asc', 'Продажи: меньше'),
+      ('new', 'Сначала новые'),
+      ('old', 'Сначала старые'),
+    ];
 
     return AppScaffold(
       child: SafeArea(
@@ -640,52 +711,28 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (!showTrash && canManageStores) ...[
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Tooltip(
-                            message: _storeLimitReached
-                                ? 'Лимит магазинов по тарифу исчерпан. Повысьте тариф в разделе «Тарифы».'
-                                : '',
-                            child: FilledButton.icon(
-                              onPressed: _storeLimitReached ? null : _showConnectStoreSheet,
-                              style: FilledButton.styleFrom(
-                                minimumSize: const Size(0, 32),
-                                backgroundColor: AppBrand.primaryBlue,
-                                disabledBackgroundColor: cs.surfaceContainerHighest,
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                visualDensity: VisualDensity.compact,
-                              ),
-                              icon: const Icon(Icons.add_rounded, size: 16),
-                              label: const Text('Подключить магазин', style: TextStyle(fontSize: 13)),
-                            ),
-                          ),
-                          if (warehouseOutlets.isNotEmpty) ...[
-                            ...warehouseOutlets.map((o) {
-                              return Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(6),
-                                  color: const Color(0xFF2563EB).withValues(alpha: dark ? 0.25 : 0.12),
-                                  border: Border.all(color: const Color(0xFF2563EB).withValues(alpha: 0.45)),
-                                ),
-                                child: Text(
-                                  (o['name'] ?? '').toString(),
-                                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: cs.onSurface),
-                                ),
-                              );
-                            }),
-                            if (maxS != null && maxS > 0)
-                              Text(
-                                '${warehouseOutlets.length}/$maxS',
-                                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, fontWeight: FontWeight.w600),
-                              ),
-                          ],
-                        ],
+                      WarehouseStoreChips(
+                        outlets: warehouseOutlets,
+                        selectedOutletId: selectedOutletId,
+                        canAdd: true,
+                        addDisabled: _storeLimitReached,
+                        onAdd: _showConnectStoreSheet,
+                        onSelectAll: () {
+                          setState(() {
+                            selectedOutletId = null;
+                            mobilePage = 1;
+                          });
+                          _loadProducts();
+                        },
+                        onSelectOutlet: (id) {
+                          setState(() {
+                            selectedOutletId = selectedOutletId == id ? null : id;
+                            mobilePage = 1;
+                          });
+                          _loadProducts();
+                        },
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
                     ],
                     if (!hasFixedWarehouse && !isSeller) ...[
                       DropdownButtonFormField<int>(
@@ -694,7 +741,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                         isExpanded: true,
                         decoration: const InputDecoration(
                           labelText: 'Склад',
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                         ),
                         items: warehouses.map((w) {
                           final id = _asInt(w['id']);
@@ -705,55 +753,83 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                           );
                         }).whereType<DropdownMenuItem<int>>().toList(),
                         onChanged: (v) async {
-                          setState(() => selectedWarehouseId = v);
+                          setState(() {
+                            selectedWarehouseId = v;
+                            selectedOutletId = null;
+                          });
                           await _loadOutlets();
                           await _loadProducts();
                         },
                       ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                     ],
-                    DropdownButtonFormField<int>(
-                      key: ValueKey<int?>(selectedCategoryId),
-                      initialValue: selectedCategoryId,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: searchCtrl,
+                            style: const TextStyle(fontSize: 14),
+                            decoration: InputDecoration(
+                              isDense: true,
+                              prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                              hintText: isSeller ? 'Найти товар…' : 'Поиск: имя / модель / артикул',
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          width: 36,
+                          height: 40,
+                          child: IconButton.outlined(
+                            onPressed: loadingProducts ? null : _loadProducts,
+                            icon: loadingProducts
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.refresh_rounded, size: 18),
+                            style: IconButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey<String>(sortKey),
+                      initialValue: sortKey,
                       isExpanded: true,
                       decoration: const InputDecoration(
-                        labelText: 'Категория',
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       ),
                       items: [
-                        const DropdownMenuItem<int>(value: null, child: Text('Все категории')),
-                        ...categories.where((c) => c['parent'] == null).map((c) {
-                          final id = _asInt(c['id']);
-                          if (id == null) return null;
-                          return DropdownMenuItem<int>(value: id, child: Text((c['name'] ?? '').toString()));
-                        }).whereType<DropdownMenuItem<int>>(),
+                        for (final o in sortOptions)
+                          DropdownMenuItem(value: o.$1, child: Text(o.$2, overflow: TextOverflow.ellipsis)),
                       ],
                       onChanged: (v) {
-                        setState(() => selectedCategoryId = v);
+                        if (v == null) return;
+                        setState(() {
+                          sortKey = v;
+                          mobilePage = 1;
+                        });
                         _loadProducts();
                       },
                     ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: searchCtrl,
-                      decoration: InputDecoration(
-                        prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                        hintText: isSeller ? 'Найти товар…' : 'Поиск по имени / модели / артикулу',
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      ),
-                    ),
-                    if (canSeeTrash) ...[
-                      const SizedBox(height: 10),
+                    if (canSeeTrash)
                       WarehouseTrashTabs(
                         showTrash: showTrash,
                         onChanged: (v) {
-                          setState(() => showTrash = v);
+                          setState(() {
+                            showTrash = v;
+                            mobilePage = 1;
+                          });
                           _loadProducts();
                         },
                       ),
-                    ],
                     if (!showTrash) ...[
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 8),
                       Row(
                         children: [
                           Switch(
@@ -767,8 +843,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Скрывать товары с нулевым остатком',
-                              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                              'Скрыть нулевой остаток',
+                              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                             ),
                           ),
                         ],
@@ -779,7 +855,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
               ),
               if (loadingProducts && products.isEmpty)
                 const SkeletonListBlock(rows: 6)
-              else if (products.isEmpty)
+              else if (sorted.isEmpty)
                 WarehouseFiltersCard(
                   cs: cs,
                   dark: dark,
@@ -794,6 +870,8 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                       cs: cs,
                       dark: dark,
                       warehouseOutlets: warehouseOutlets,
+                      filterOutletId: selectedOutletId,
+                      usdToTjs: usdToTjs,
                       showTrash: showTrash,
                       isSeller: isSeller,
                       canSeeWarehouseQty: canSeeWarehouseQty,
@@ -808,7 +886,7 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                       onRestore: showTrash ? () => _handleRestore(record) : null,
                     ),
                   ),
-                if (products.length > _warehouseMobilePageSize)
+                if (sorted.length > _warehouseMobilePageSize)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Row(
@@ -818,9 +896,9 @@ class _WarehouseScreenState extends State<WarehouseScreen> {
                           onPressed: mobilePage > 1 ? () => setState(() => mobilePage--) : null,
                           icon: const Icon(Icons.chevron_left_rounded),
                         ),
-                        Text('$mobilePage / ${(products.length / _warehouseMobilePageSize).ceil()}'),
+                        Text('$mobilePage / ${(sorted.length / _warehouseMobilePageSize).ceil()}'),
                         IconButton(
-                          onPressed: mobilePage * _warehouseMobilePageSize < products.length
+                          onPressed: mobilePage * _warehouseMobilePageSize < sorted.length
                               ? () => setState(() => mobilePage++)
                               : null,
                           icon: const Icon(Icons.chevron_right_rounded),

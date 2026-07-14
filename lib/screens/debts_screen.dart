@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
@@ -76,22 +77,16 @@ Widget? _fxLine(dynamic amount, String? currency, double? usdToTjs, ColorScheme 
   if (cur == 'TJS') {
     return Text(
       '≈ ${_formatMoneyRu(n / rate)} USD',
-      style: TextStyle(fontSize: 11, height: 1.35, color: cs.onSurfaceVariant),
+      style: const TextStyle(fontSize: 11, height: 1.35, color: _muted),
     );
   }
   if (cur == 'USD') {
     return Text(
       '≈ ${_formatMoneyRu(n * rate)} TJS',
-      style: TextStyle(fontSize: 11, height: 1.35, color: cs.onSurfaceVariant),
+      style: const TextStyle(fontSize: 11, height: 1.35, color: _muted),
     );
   }
   return null;
-}
-
-String _sliceDate(dynamic v) {
-  if (v == null) return '—';
-  final s = v.toString();
-  return s.length >= 10 ? s.substring(0, 10) : s;
 }
 
 String _sliceCreated(dynamic v) {
@@ -103,9 +98,21 @@ String _sliceCreated(dynamic v) {
 const _debtsMobilePageSize = 10;
 const _weOweGreenRemainingMax = 50;
 const _cardBg = Color(0xFF1A2438);
+const _surface = Color(0xFF151D2E);
+const _muted = Color(0xFF94A3B8);
+const _border = Color(0x1AFFFFFF);
 const _progressGreen = Color(0xFF73D13D);
 const _progressRed = Color(0xFFFF7875);
 const _blue = Color(0xFF2563EB);
+const _weOweRed = Color(0xFFFF4D4F);
+const _clientGreen = Color(0xFF52C41A);
+
+String _fmtDmy(DateTime d) {
+  final dd = d.day.toString().padLeft(2, '0');
+  final mm = d.month.toString().padLeft(2, '0');
+  final yy = d.year.toString().padLeft(4, '0');
+  return '$dd.$mm.$yy';
+}
 
 String _formatDebtCreated(dynamic v) {
   if (v == null) return '—';
@@ -129,41 +136,6 @@ String _formatDebtCreated(dynamic v) {
   final percentPaid = total > 0 ? ((paid / total) * 100).round().clamp(0, 100) : 0;
   final percentRemaining = total > 0 ? ((remaining / total) * 100).round().clamp(0, 100) : 0;
   return (total: total, paid: paid, remaining: remaining, percentPaid: percentPaid, percentRemaining: percentRemaining);
-}
-
-({String text, String tone})? _dueDateCountdown(dynamic dueDate) {
-  if (dueDate == null) return null;
-  final raw = dueDate.toString();
-  final head = raw.length >= 10 ? raw.substring(0, 10) : raw;
-  DateTime? due;
-  try {
-    due = DateTime.parse(head);
-  } catch (_) {
-    return null;
-  }
-  final now = DateTime.now();
-  final today = DateTime(now.year, now.month, now.day);
-  final dueDay = DateTime(due.year, due.month, due.day);
-  final daysLeft = dueDay.difference(today).inDays;
-  if (daysLeft < 0) {
-    final overdue = daysLeft.abs();
-    return (text: overdue == 1 ? 'Просрочено: 1 день' : 'Просрочено: $overdue дн.', tone: 'overdue');
-  }
-  if (daysLeft == 0) return (text: 'Срок сегодня', tone: 'today');
-  if (daysLeft == 1) return (text: 'До срока: 1 день', tone: 'soon');
-  return (text: 'До срока: $daysLeft дн.', tone: daysLeft <= 3 ? 'soon' : 'ok');
-}
-
-Color _dueCountdownColor(String tone) {
-  switch (tone) {
-    case 'overdue':
-      return _progressRed;
-    case 'soon':
-    case 'today':
-      return const Color(0xFFFFC069);
-    default:
-      return const Color(0xFF91CAFF);
-  }
 }
 
 class DebtsScreen extends StatefulWidget {
@@ -326,7 +298,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
     if (picked == null || !mounted) return;
     setState(() {
       dateRange = picked;
-      datePresetKey = 'period';
+      datePresetKey = 'custom';
     });
     await _loadDebts();
   }
@@ -353,6 +325,36 @@ class _DebtsScreenState extends State<DebtsScreen> {
     _loadDebts();
   }
 
+  Future<void> _exportExcel() async {
+    if (debts.isEmpty) {
+      _snack('Нет данных для экспорта');
+      return;
+    }
+    final header = ['Тип', 'Контрагент', 'Телефон', 'Сумма', 'Остаток', 'Валюта', 'Оплачено %', 'Дата', 'Магазин', 'Примечание'];
+    final lines = debts.map((r) {
+      final st = _debtPaymentStats(r);
+      final type = r['debt_type'] == 'we_owe' ? 'Мы должны' : 'Клиент должен';
+      final note = (r['note'] ?? '').toString().replaceAll('"', '""');
+      final cells = [
+        type,
+        (r['debtor_name'] ?? r['debtor_display'] ?? '').toString(),
+        (r['client_phone'] ?? '').toString(),
+        (r['amount'] ?? '').toString(),
+        st.remaining.toString(),
+        (r['currency'] ?? 'TJS').toString(),
+        st.percentPaid.toString(),
+        _formatDebtCreated(r['created_at']),
+        (r['sale_outlet_name'] ?? '').toString(),
+        note,
+      ].map((c) => '"$c"').join(',');
+      return cells;
+    });
+    final csv = '\uFEFF${header.join(',')}\n${lines.join('\n')}';
+    await Clipboard.setData(ClipboardData(text: csv));
+    if (!mounted) return;
+    _snack('CSV скопирован — вставьте в Excel');
+  }
+
   Future<void> _openAdd() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -362,6 +364,22 @@ class _DebtsScreenState extends State<DebtsScreen> {
       builder: (ctx) => _AddDebtSheet(
         outlets: outlets,
         userWarehouse: _user?['warehouse'],
+        usdToTjs: usdToTjs,
+        onSaved: () {
+          Navigator.pop(ctx);
+          _loadDebts();
+        },
+      ),
+    );
+  }
+
+  Future<void> _openAddWeOwe() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: RoundedRectangleBorder(borderRadius: AppShape.sheetTop),
+      builder: (ctx) => _AddWeOweSheet(
         usdToTjs: usdToTjs,
         onSaved: () {
           Navigator.pop(ctx);
@@ -619,21 +637,28 @@ class _DebtsScreenState extends State<DebtsScreen> {
           ),
           const SizedBox(height: 2),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'Оплачено ${stats.percentPaid}%',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: weOweMotivated ? _progressGreen : Colors.white.withValues(alpha: 0.55),
+              Expanded(
+                child: Text(
+                  'Оплачено ${stats.percentPaid}%',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: weOweMotivated ? _progressGreen : _muted,
+                  ),
                 ),
               ),
-              Text(
-                rightLabel,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: (isClosed || weOweMotivated) ? FontWeight.w600 : FontWeight.w400,
-                  color: (isClosed || weOweMotivated) ? _progressGreen : Colors.white.withValues(alpha: 0.55),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  rightLabel,
+                  textAlign: TextAlign.right,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: (isClosed || weOweMotivated) ? FontWeight.w600 : FontWeight.w400,
+                    color: (isClosed || weOweMotivated) ? _progressGreen : _muted,
+                  ),
                 ),
               ),
             ],
@@ -674,12 +699,12 @@ class _DebtsScreenState extends State<DebtsScreen> {
     final amt = _asDouble(r['amount']);
     final stats = _debtPaymentStats(r);
     final cur = (r['currency'] ?? 'TJS').toString();
-    final signColor = weOwe ? const Color(0xFFFF4D4F) : const Color(0xFF52C41A);
+    final signColor = weOwe ? _weOweRed : _clientGreen;
     final sign = weOwe ? '−' : '+';
-    final borderColor = weOwe ? const Color(0xFFFF4D4F).withValues(alpha: 0.35) : const Color(0xFF52C41A).withValues(alpha: 0.35);
+    final borderColor = weOwe ? _weOweRed.withValues(alpha: 0.35) : _clientGreen.withValues(alpha: 0.35);
     final canPay = !_isClient && !showTrash && stats.remaining > 0.009;
     final showClientSms = !weOwe && !_isClient && !showTrash;
-    final dueInfo = _dueDateCountdown(r['due_date']);
+    final note = (r['note'] ?? '').toString().trim();
     final payLabel = stats.percentRemaining > 0 && stats.percentRemaining < 100
         ? 'Оплатить (осталось ${stats.percentRemaining}%)'
         : 'Оплатить';
@@ -713,7 +738,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
                         if (!weOwe && (r['client_phone'] as String?)?.isNotEmpty == true)
                           Padding(
                             padding: const EdgeInsets.only(top: 2),
-                            child: Text(r['client_phone'] as String, style: TextStyle(fontSize: 12, color: cs.onSurface.withValues(alpha: 0.55))),
+                            child: Text(r['client_phone'] as String, style: const TextStyle(fontSize: 12, color: _muted)),
                           ),
                         if (!weOwe && r['sale_batch_id'] != null)
                           Padding(
@@ -731,35 +756,45 @@ class _DebtsScreenState extends State<DebtsScreen> {
                     ),
                   ),
                   if (!_isClient)
-                    _actionsRow(r, clientOwes: !weOwe, hidePay: !weOwe, hideSms: !weOwe),
+                    _actionsRow(r, clientOwes: !weOwe, hidePay: true, hideSms: true),
                 ],
               ),
               const SizedBox(height: 10),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Сумма', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.5))),
+                        const Text('Сумма', style: TextStyle(fontSize: 11, color: _muted)),
                         const SizedBox(height: 2),
                         Text(
                           amt != null ? '$sign${_formatMoneyRu(amt)} $cur' : '—',
                           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: signColor),
                         ),
+                        if (_fxLine(amt, cur, usdToTjs, cs) != null) ...[
+                          const SizedBox(height: 1),
+                          _fxLine(amt, cur, usdToTjs, cs)!,
+                        ],
                       ],
                     ),
                   ),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Остаток', style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.5))),
+                        const Text('Остаток', style: TextStyle(fontSize: 11, color: _muted)),
                         const SizedBox(height: 2),
                         Text(
-                          '$sign${_formatMoneyRu(stats.remaining)}',
+                          '$sign${_formatMoneyRu(stats.remaining)} $cur',
                           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: signColor),
                         ),
+                        if (_fxLine(stats.remaining, cur, usdToTjs, cs) != null) ...[
+                          const SizedBox(height: 1),
+                          _fxLine(stats.remaining, cur, usdToTjs, cs)!,
+                        ],
                       ],
                     ),
                   ),
@@ -772,33 +807,26 @@ class _DebtsScreenState extends State<DebtsScreen> {
                   spacing: 12,
                   runSpacing: 4,
                   children: [
-                    Text(_formatDebtCreated(r['created_at']), style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55))),
-                    if (r['due_date'] != null)
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Срок: ${_sliceDate(r['due_date'])}', style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55))),
-                          if (dueInfo != null)
-                            Text(dueInfo.text, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _dueCountdownColor(dueInfo.tone))),
-                        ],
-                      ),
+                    Text(_formatDebtCreated(r['created_at']), style: const TextStyle(fontSize: 12, color: _muted)),
                     if ((r['sale_outlet_name'] as String?)?.isNotEmpty ?? false)
-                      Text(r['sale_outlet_name'] as String, style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55))),
+                      Text(r['sale_outlet_name'] as String, style: const TextStyle(fontSize: 12, color: _muted)),
+                    if (note.isNotEmpty)
+                      Text(note, style: const TextStyle(fontSize: 12, color: _muted, fontStyle: FontStyle.italic)),
                   ],
                 ),
               ),
               if (canPay || showClientSms) ...[
                 const SizedBox(height: 12),
                 if (canPay)
-                  FilledButton.icon(
+                  FilledButton(
                     onPressed: () => _openPayment(r),
-                    icon: const Icon(Icons.paid_outlined, size: 18),
-                    label: Text(payLabel),
                     style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(44),
+                      minimumSize: const Size.fromHeight(40),
                       backgroundColor: _blue,
-                      textStyle: const TextStyle(fontWeight: FontWeight.w600),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                     ),
+                    child: Text(payLabel),
                   ),
                 if (showClientSms) ...[
                   if (canPay) const SizedBox(height: 8),
@@ -923,6 +951,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
   Widget build(BuildContext context) {
     final u = context.watch<SessionController>().user;
     final cs = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
 
     if (u == null || !canAccessSection(u, 'debts', null)) {
       return const AppScaffold(child: SafeArea(top: false, child: Center(child: Text('Нет доступа'))));
@@ -930,26 +959,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
 
     final weOwe = debts.where((d) => d['debt_type'] == 'we_owe').toList();
     final clientOwes = debts.where((d) => d['debt_type'] == 'client_owes').toList();
-
-    String title;
-    if (_isClient) {
-      title = 'Мои долги';
-    } else if (_isSeller) {
-      title = 'Долги (Насия)';
-    } else {
-      title = 'Долги (Насия)';
-    }
-
-    String subtitle;
-    if (_isClient) {
-      subtitle = 'Открытые долги по вашему номеру телефона в магазинах (насия и частичная оплата с продажи).';
-    } else if (_isSeller) {
-      subtitle =
-          'Записи появляются автоматически при продаже с оплатой Насия или Частично (имя клиента, телефон, товары и сумма). Раздел «Мы должим» для продавца скрыт.';
-    } else {
-      subtitle =
-          '«Мы должим» — из поступления «в долг». «Клиент должин» — вручную или автоматически при продаже с оплатой Насия или Частично.';
-    }
+    final title = _isClient ? 'Мои долги' : 'Долги (Насия)';
 
     return AppScaffold(
       child: SafeArea(
@@ -963,93 +973,188 @@ class _DebtsScreenState extends State<DebtsScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             children: [
-              Text(title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: cs.onSurface)),
-              const SizedBox(height: 8),
-              Text(subtitle, style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant, height: 1.35)),
-              const SizedBox(height: 8),
-              TextField(
-                controller: searchCtrl,
-                decoration: InputDecoration(
-                  hintText: 'Поиск по контрагенту',
-                  border: OutlineInputBorder(borderRadius: AppShape.br),
-                  isDense: true,
-                  suffixIcon: IconButton(icon: const Icon(Icons.search), onPressed: () {
-                    search = searchCtrl.text;
-                    _loadDebts();
-                  }),
+              Text(title, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: cs.onSurface)),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                decoration: BoxDecoration(
+                  color: dark ? _surface : Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: dark ? _border : Colors.black.withValues(alpha: 0.08)),
                 ),
-                onSubmitted: (_) {
-                  search = searchCtrl.text;
-                  _loadDebts();
-                },
-              ),
-              const SizedBox(height: 8),
-              QuickDateRangeChips(
-                colorScheme: cs,
-                selected: datePresetKey,
-                onToday: () => _applyDateQuick('today'),
-                onWeek: () => _applyDateQuick('week'),
-                onMonth: () => _applyDateQuick('month'),
-                onPeriod: () => _applyDateQuick('period'),
-              ),
-              if (dateRange != null) ...[
-                const SizedBox(height: 6),
-                Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Expanded(
-                      child: Text(
-                        '${_fmtYmd(dateRange!.start)} — ${_fmtYmd(dateRange!.end)}',
-                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                    TextField(
+                      controller: searchCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'Поиск по контрагенту',
+                        hintStyle: const TextStyle(color: _muted, fontSize: 13),
+                        prefixIcon: const Icon(Icons.search_rounded, size: 18, color: _muted),
+                        isDense: true,
+                        filled: true,
+                        fillColor: dark ? Colors.white.withValues(alpha: 0.03) : null,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10),
+                          borderSide: BorderSide(color: dark ? _border : Colors.black.withValues(alpha: 0.1)),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      ),
+                      onSubmitted: (_) {
+                        search = searchCtrl.text;
+                        _loadDebts();
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    QuickDateRangeChips(
+                      colorScheme: cs,
+                      selected: datePresetKey == 'period' || datePresetKey == 'custom' ? null : datePresetKey,
+                      showPeriod: false,
+                      onToday: () => _applyDateQuick('today'),
+                      onWeek: () => _applyDateQuick('week'),
+                      onMonth: () => _applyDateQuick('month'),
+                      onPeriod: () => _applyDateQuick('period'),
+                    ),
+                    const SizedBox(height: 8),
+                    Material(
+                      color: dark ? Colors.white.withValues(alpha: 0.03) : cs.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(10),
+                      child: InkWell(
+                        onTap: _pickDateRange,
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: dark ? _border : Colors.black.withValues(alpha: 0.1)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  dateRange == null
+                                      ? 'Начальная дата → Конечная дата'
+                                      : '${_fmtDmy(dateRange!.start)} → ${_fmtDmy(dateRange!.end)}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: dateRange == null ? _muted : cs.onSurface,
+                                  ),
+                                ),
+                              ),
+                              if (dateRange != null)
+                                GestureDetector(
+                                  onTap: _clearDateRange,
+                                  child: const Padding(
+                                    padding: EdgeInsets.only(right: 6),
+                                    child: Icon(Icons.close_rounded, size: 16, color: _muted),
+                                  ),
+                                ),
+                              const Icon(Icons.calendar_today_outlined, size: 14, color: _muted),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                    IconButton(
-                      onPressed: _clearDateRange,
-                      icon: const Icon(Icons.clear),
-                      tooltip: 'Сбросить период',
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+                    if (!_isClient) ...[
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          SizedBox(
+                            height: 24,
+                            child: Switch.adaptive(
+                              value: showTrash,
+                              activeThumbColor: _blue,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              onChanged: (v) {
+                                setState(() => showTrash = v);
+                                _loadDebts();
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text('В корзине', style: TextStyle(fontSize: 13, color: _muted)),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: loading
+                              ? null
+                              : () async {
+                                  await _loadRate();
+                                  await _loadOutlets();
+                                  await _loadDebts();
+                                },
+                          icon: loading
+                              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.refresh_rounded, size: 16),
+                          label: const Text('Обновить'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: cs.onSurface.withValues(alpha: 0.85),
+                            side: BorderSide(color: dark ? _border : Colors.black.withValues(alpha: 0.12)),
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          ),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: _exportExcel,
+                          icon: const Icon(Icons.download_rounded, size: 16),
+                          label: const Text('Excel'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: cs.onSurface.withValues(alpha: 0.85),
+                            side: BorderSide(color: dark ? _border : Colors.black.withValues(alpha: 0.12)),
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-              if (!_isClient) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Switch(value: showTrash, onChanged: (v) {
-                      setState(() => showTrash = v);
-                      _loadDebts();
-                    }),
-                    Text('В корзине', style: TextStyle(color: cs.onSurfaceVariant)),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 8),
+              ),
+              const SizedBox(height: 12),
               if (!_isSeller && !_isClient)
                 _sectionCard(
-                  title: 'Мы должим',
+                  title: 'Мы должны',
                   items: weOwe,
                   weOwe: true,
-                  tint: cs.error.withValues(alpha: 0.06),
-                  border: const Color(0xFFFF4D4F).withValues(alpha: 0.35),
+                  tint: _weOweRed.withValues(alpha: 0.06),
+                  border: _weOweRed.withValues(alpha: 0.35),
                   page: weOweMobilePage,
                   onPage: (p) => setState(() => weOweMobilePage = p),
-                  emptyMessage: 'Нет записей «Мы должим».',
+                  emptyMessage: 'Нет записей «Мы должны».',
+                  titleTrailing: (!showTrash)
+                      ? FilledButton.icon(
+                          onPressed: _openAddWeOwe,
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('Добавить'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _blue,
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                          ),
+                        )
+                      : null,
                 ),
               _sectionCard(
-                title: _isClient ? 'Долги' : 'Клиент должин',
+                title: _isClient ? 'Долги' : 'Клиент должен',
                 items: clientOwes,
                 weOwe: false,
-                tint: const Color(0xFF52C41A).withValues(alpha: 0.06),
-                border: const Color(0xFF52C41A).withValues(alpha: 0.35),
+                tint: _clientGreen.withValues(alpha: 0.06),
+                border: _clientGreen.withValues(alpha: 0.35),
                 page: clientOwesMobilePage,
                 onPage: (p) => setState(() => clientOwesMobilePage = p),
-                emptyMessage: 'Нет записей. Долги с продажи (насия/частично) создаются автоматически; «Добавить» — вручную.',
+                emptyMessage: 'Нет записей. Долги с продажи создаются автоматически.',
                 titleTrailing: (!showTrash && !_isClient)
                     ? FilledButton.icon(
                         onPressed: outlets.isEmpty ? null : _openAdd,
-                        icon: const Icon(Icons.add, size: 18),
+                        icon: const Icon(Icons.add, size: 16),
                         label: const Text('Добавить'),
                         style: FilledButton.styleFrom(
                           backgroundColor: _blue,
@@ -1063,8 +1168,10 @@ class _DebtsScreenState extends State<DebtsScreen> {
               if (!_isClient && outlets.isEmpty && !loading)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text('Нет магазинов для вашего склада — создайте точку в разделе «Магазины».',
-                      style: TextStyle(color: cs.tertiary)),
+                  child: Text(
+                    'Нет магазинов для вашего склада — создайте точку в разделе «Магазины».',
+                    style: TextStyle(color: cs.tertiary),
+                  ),
                 ),
             ],
           ),
@@ -1453,6 +1560,160 @@ class _AddDebtSheetState extends State<_AddDebtSheet> {
                 Expanded(
                   child: FilledButton(
                     onPressed: (saving || !smsVerified || !phoneOk) ? null : _save,
+                    child: saving ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Сохранить'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// --- Edit ---
+
+class _AddWeOweSheet extends StatefulWidget {
+  const _AddWeOweSheet({
+    required this.usdToTjs,
+    required this.onSaved,
+  });
+
+  final double? usdToTjs;
+  final VoidCallback onSaved;
+
+  @override
+  State<_AddWeOweSheet> createState() => _AddWeOweSheetState();
+}
+
+class _AddWeOweSheetState extends State<_AddWeOweSheet> {
+  final nameCtrl = TextEditingController();
+  final phoneCtrl = TextEditingController();
+  final amountCtrl = TextEditingController();
+  final noteCtrl = TextEditingController();
+  String currency = 'TJS';
+  bool saving = false;
+
+  @override
+  void dispose() {
+    nameCtrl.dispose();
+    phoneCtrl.dispose();
+    amountCtrl.dispose();
+    noteCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = nameCtrl.text.trim();
+    var digits = phoneCtrl.text.replaceAll(RegExp(r'\D'), '');
+    if (digits.startsWith('992')) digits = digits.substring(3);
+    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    final note = noteCtrl.text.trim();
+
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Номро ворид кунед')));
+      return;
+    }
+    if (digits.length != 9) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Рақами телефон: 9 рақам баъди +992')));
+      return;
+    }
+    if (amount == null || amount <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Суммаи қарзро дуруст ворид кунед')));
+      return;
+    }
+    if (note.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Описание (примечание) лозим аст')));
+      return;
+    }
+
+    setState(() => saving = true);
+    try {
+      final api = context.read<ApiClient>();
+      final res = await api.post('inventory/debts/we-owe/', body: {
+        'debtor_display': name,
+        'client_phone': '992$digits',
+        'amount': amount,
+        'currency': currency,
+        'note': note,
+      });
+      if (!mounted) return;
+      final data = _tryJsonMap(res.body);
+      if (res.statusCode != 200 && res.statusCode != 201) {
+        throw Exception(_firstApiError(data));
+      }
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Қарз ба “Мы должим” илова шуд')));
+      widget.onSaved();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString()), backgroundColor: Theme.of(context).colorScheme.error));
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
+    return Padding(
+      padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: bottom + 16),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(child: Container(width: 40, height: 4, decoration: AppShape.sheetHandle(cs.outlineVariant))),
+            const SizedBox(height: 12),
+            Text('Добавить: Мы должим', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Ном *', border: OutlineInputBorder())),
+            const SizedBox(height: 12),
+            TextField(
+              controller: phoneCtrl,
+              decoration: const InputDecoration(labelText: 'Номер телефон *', prefixText: '+992 ', border: OutlineInputBorder()),
+              keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: amountCtrl,
+              decoration: const InputDecoration(labelText: 'Суммаи қарз *', border: OutlineInputBorder()),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: currency,
+              decoration: const InputDecoration(labelText: 'Валюта', border: OutlineInputBorder()),
+              items: const [
+                DropdownMenuItem(value: 'TJS', child: Text('TJS')),
+                DropdownMenuItem(value: 'USD', child: Text('USD')),
+              ],
+              onChanged: (v) => setState(() => currency = v ?? 'TJS'),
+            ),
+            if (amount != null && amount > 0) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _fxLine(amount, currency, widget.usdToTjs, cs) ?? const SizedBox.shrink(),
+              ),
+            ],
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteCtrl,
+              decoration: const InputDecoration(labelText: 'Описание *', border: OutlineInputBorder(), alignLabelWithHint: true),
+              maxLines: 3,
+              maxLength: 500,
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed: saving ? null : _save,
                     child: saving ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Сохранить'),
                   ),
                 ),

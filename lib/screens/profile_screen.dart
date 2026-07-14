@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -78,24 +79,26 @@ String _fmtDate(dynamic raw) {
 }
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  const ProfileScreen({super.key, this.focusWarehouse = false});
+
+  /// После открытия сразу прокрутить к полям склада (название / адрес).
+  final bool focusWarehouse;
 
   @override
-  State<ProfileScreen> createState() => _ProfileScreenState();
+  State<ProfileScreen> createState() => ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
+class ProfileScreenState extends State<ProfileScreen> {
   bool editing = false;
   bool savingProfile = false;
 
   final TextEditingController firstNameCtrl = TextEditingController();
   final TextEditingController lastNameCtrl = TextEditingController();
 
-  bool topupOpen = false;
   bool topupLoading = false;
+  String topupProvider = 'alif';
   final TextEditingController topupAmountCtrl = TextEditingController(text: '10');
 
-  bool withdrawOpen = false;
   bool withdrawLoading = false;
   final TextEditingController withdrawAmountCtrl = TextEditingController(text: '10');
   final TextEditingController withdrawNoteCtrl = TextEditingController();
@@ -112,16 +115,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool accountDeleting = false;
   final TextEditingController warehouseNameCtrl = TextEditingController();
   final TextEditingController warehouseAddressCtrl = TextEditingController();
+  final GlobalKey _warehouseSectionKey = GlobalKey();
+  final FocusNode _warehouseNameFocus = FocusNode();
 
   @override
   void initState() {
     super.initState();
+    if (widget.focusWarehouse) {
+      editingWarehouse = true;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await context.read<SessionController>().bootstrap();
       if (!mounted) return;
+      // Не вызываем bootstrap() — он ставит isReady=false и снова показывает загрузку.
       _syncFromUser();
       await _loadBalanceHistory();
       await _loadClientDebtsIfNeeded();
+      if (widget.focusWarehouse) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        if (mounted) focusWarehouseFields();
+      }
+    });
+  }
+
+  /// Прокрутка к блоку «Склад» и фокус на название.
+  void focusWarehouseFields() {
+    if (!mounted) return;
+    setState(() => editingWarehouse = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _warehouseSectionKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+          alignment: 0.15,
+        );
+      }
+      _warehouseNameFocus.requestFocus();
     });
   }
 
@@ -134,14 +165,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
     withdrawNoteCtrl.dispose();
     warehouseNameCtrl.dispose();
     warehouseAddressCtrl.dispose();
+    _warehouseNameFocus.dispose();
     super.dispose();
+  }
+
+  String _cleanMsg(Object msg) {
+    return msg.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
   }
 
   void _snack(String msg, {bool error = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: error ? Theme.of(context).colorScheme.error : null),
-    );
+    final text = _cleanMsg(msg);
+    if (text.isEmpty) return;
+    if (error) {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Ошибка'),
+          content: Text(text),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('ОК'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Map<String, dynamic>? get _user => context.read<SessionController>().user;
@@ -162,7 +214,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final res = await api.patch('me/', body: {'first_name': firstNameCtrl.text.trim(), 'last_name': lastNameCtrl.text.trim()});
       if (!mounted) return;
       if (res.statusCode != 200) throw Exception('Не удалось сохранить профиль');
-      await context.read<SessionController>().bootstrap();
+      await context.read<SessionController>().reloadUser();
       if (!mounted) return;
       _syncFromUser();
       _snack('Профиль обновлён');
@@ -218,7 +270,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _topup() async {
+  Future<void> _topup({VoidCallback? closeDialog}) async {
     final amount = double.tryParse(topupAmountCtrl.text.replaceAll(',', '.'));
     if (amount == null || amount < 2) {
       _snack('Минимальная сумма — 2 сомони', error: true);
@@ -228,42 +280,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _snack('Оплатите через банк и отправьте чек в Telegram или WhatsApp');
       return;
     }
-    setState(() => topupLoading = true);
+    if (topupProvider != 'alif' && topupProvider != 'smartpay') {
+      _snack('Выберите способ оплаты', error: true);
+      return;
+    }
     final api = context.read<ApiClient>();
     try {
       final res = await api.post(
         'me/balance/topup/',
         body: {
           'amount': amount,
-          'return_url': 'https://api.tojir.tj/payment/return/',
-          'provider': 'alif',
+          'return_url': 'https://api.tojir.tj/payment/return/app/',
+          'provider': topupProvider,
         },
       );
       if (!mounted) return;
       final data = _tryJsonMap(res.body);
-      if (res.statusCode != 200 && res.statusCode != 201) throw Exception((data['detail'] ?? 'Ошибка создания платежа').toString());
+      if (res.statusCode != 200 && res.statusCode != 201) {
+        throw Exception((data['detail'] ?? 'Ошибка создания платежа').toString());
+      }
       final link = (data['payment_link'] ?? '').toString();
       if (link.isEmpty) throw Exception('Нет ссылки на оплату');
       final uri = Uri.tryParse(link);
       if (uri == null) throw Exception('Некорректная ссылка оплаты');
       final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!ok) throw Exception('Не удалось открыть ссылку оплаты');
-      setState(() => topupOpen = false);
-      _snack('Откройте оплату Alif в браузере и вернитесь в приложение');
+      closeDialog?.call();
+      _snack(
+        topupProvider == 'smartpay'
+            ? 'Откройте оплату SmartPay в браузере и вернитесь в приложение'
+            : 'Откройте оплату Alif в браузере и вернитесь в приложение',
+      );
     } catch (e) {
-      _snack(e.toString(), error: true);
-    } finally {
-      if (mounted) setState(() => topupLoading = false);
+      _snack(_cleanMsg(e), error: true);
     }
   }
 
-  Future<void> _withdraw() async {
+  Future<void> _withdraw({VoidCallback? closeDialog}) async {
     final amount = double.tryParse(withdrawAmountCtrl.text.replaceAll(',', '.'));
     if (amount == null || amount < 1) {
       _snack('Минимальная сумма вывода — 1 сомони', error: true);
       return;
     }
-    setState(() => withdrawLoading = true);
     final api = context.read<ApiClient>();
     try {
       final res = await api.post('me/balance/withdraw/', body: {'amount': amount, 'note': withdrawNoteCtrl.text.trim()});
@@ -271,13 +329,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final data = _tryJsonMap(res.body);
       if (res.statusCode != 200 && res.statusCode != 201) throw Exception((data['detail'] ?? 'Ошибка заявки').toString());
       _snack((data['detail'] ?? 'Заявка отправлена').toString());
-      setState(() => withdrawOpen = false);
+      closeDialog?.call();
       withdrawNoteCtrl.clear();
       await _loadBalanceHistory();
     } catch (e) {
-      _snack(e.toString(), error: true);
-    } finally {
-      if (mounted) setState(() => withdrawLoading = false);
+      _snack(_cleanMsg(e), error: true);
     }
   }
 
@@ -298,7 +354,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final res = await api.patch('me/', body: {'warehouse_name': name, 'warehouse_address': address});
       if (!mounted) return;
       if (res.statusCode != 200) throw Exception('Ошибка');
-      await context.read<SessionController>().bootstrap();
+      await context.read<SessionController>().reloadUser();
       if (!mounted) return;
       _syncFromUser();
       _snack('Склад сохранён');
@@ -335,7 +391,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       if (res.statusCode != 200) throw Exception('Ошибка');
       if (!context.mounted) return;
-      await context.read<SessionController>().bootstrap();
+      await context.read<SessionController>().reloadUser();
       if (!mounted) return;
       _syncFromUser();
       _snack('Склад удалён');
@@ -413,7 +469,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         top: false,
         child: RefreshIndicator(
           onRefresh: () async {
-            await context.read<SessionController>().bootstrap();
+            await context.read<SessionController>().reloadUser();
             if (!context.mounted) return;
             _syncFromUser();
             await _loadBalanceHistory();
@@ -460,7 +516,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           if (balance > 0) ...[
                             const SizedBox(height: 10),
                             OutlinedButton.icon(
-                              onPressed: () => setState(() => withdrawOpen = true),
+                              onPressed: () => _openWithdrawDialog(balance),
                               icon: const Icon(Icons.remove, size: 18),
                               label: const Text('Запросить вывод'),
                             ),
@@ -471,7 +527,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             runSpacing: 10,
                             children: [
                               FilledButton.icon(
-                                onPressed: () => setState(() => topupOpen = true),
+                                onPressed: isIosApp
+                                    ? null
+                                    : () {
+                                        topupProvider = 'alif';
+                                        _openTopupDialog(balance);
+                                      },
                                 icon: const Icon(Icons.add, size: 18),
                                 label: const Text('Пополнить баланс'),
                                 style: FilledButton.styleFrom(
@@ -482,7 +543,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ),
                               ),
                               OutlinedButton.icon(
-                                onPressed: () => setState(() => withdrawOpen = true),
+                                onPressed: () => _openWithdrawDialog(balance),
                                 icon: const Icon(Icons.remove, size: 18),
                                 label: const Text('Запросить вывод'),
                               ),
@@ -517,48 +578,71 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         const SizedBox(height: 16),
                         const Divider(),
                         const SizedBox(height: 10),
-                        const Text('Склад', style: TextStyle(fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 8),
-                        if (showWarehouseForm) ...[
-                          TextField(
-                            controller: warehouseNameCtrl,
-                            decoration: const InputDecoration(labelText: 'Название склада *', border: OutlineInputBorder()),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: warehouseAddressCtrl,
-                            decoration: const InputDecoration(labelText: 'Адрес *', border: OutlineInputBorder()),
-                          ),
-                          const SizedBox(height: 12),
-                          FilledButton(
-                            onPressed: warehouseSaving ? null : _saveWarehouse,
-                            child: warehouseSaving
-                                ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                                : const Text('Сохранить'),
-                          ),
-                        ] else ...[
-                          _kv('Название склада', (u['warehouse_name'] ?? '—').toString(), cs),
-                          _kv('Адрес', (u['warehouse_address'] ?? '—').toString(), cs),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 10,
+                        KeyedSubtree(
+                          key: _warehouseSectionKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              FilledButton.icon(
-                                onPressed: () => setState(() => editingWarehouse = true),
-                                icon: const Icon(Icons.edit_outlined, size: 18),
-                                label: const Text('Изменить'),
-                              ),
-                              FilledButton.icon(
-                                onPressed: warehouseDeleting ? null : _deleteWarehouse,
-                                style: FilledButton.styleFrom(backgroundColor: cs.error),
-                                icon: const Icon(Icons.delete_outline, size: 18),
-                                label: warehouseDeleting
-                                    ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                                    : const Text('Удалить'),
-                              ),
+                              const Text('Склад', style: TextStyle(fontWeight: FontWeight.w800)),
+                              const SizedBox(height: 8),
+                              if (showWarehouseForm) ...[
+                                TextField(
+                                  controller: warehouseNameCtrl,
+                                  focusNode: _warehouseNameFocus,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Название склада *',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: warehouseAddressCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Адрес *',
+                                    border: OutlineInputBorder(),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                FilledButton(
+                                  onPressed: warehouseSaving ? null : _saveWarehouse,
+                                  child: warehouseSaving
+                                      ? const SizedBox(
+                                          height: 22,
+                                          width: 22,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        )
+                                      : const Text('Сохранить'),
+                                ),
+                              ] else ...[
+                                _kv('Название склада', (u['warehouse_name'] ?? '—').toString(), cs),
+                                _kv('Адрес', (u['warehouse_address'] ?? '—').toString(), cs),
+                                Wrap(
+                                  spacing: 10,
+                                  runSpacing: 10,
+                                  children: [
+                                    FilledButton.icon(
+                                      onPressed: () => setState(() => editingWarehouse = true),
+                                      icon: const Icon(Icons.edit_outlined, size: 18),
+                                      label: const Text('Изменить'),
+                                    ),
+                                    FilledButton.icon(
+                                      onPressed: warehouseDeleting ? null : _deleteWarehouse,
+                                      style: FilledButton.styleFrom(backgroundColor: cs.error),
+                                      icon: const Icon(Icons.delete_outline, size: 18),
+                                      label: warehouseDeleting
+                                          ? const SizedBox(
+                                              height: 22,
+                                              width: 22,
+                                              child: CircularProgressIndicator(strokeWidth: 2),
+                                            )
+                                          : const Text('Удалить'),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ],
                           ),
-                        ],
+                        ),
                       ],
                     ],
                   ),
@@ -758,12 +842,179 @@ else if (clientDebts.isEmpty)
                 ),
               ],
               const SizedBox(height: 12),
-              if (topupOpen && !isIosApp) _topupSheet(context, balance),
-              if (withdrawOpen) _withdrawSheet(context, balance),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _openTopupDialog(double balance) async {
+    if (!mounted || isIosApp) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !topupLoading,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            return AlertDialog(
+              title: const Text('Пополнить баланс'),
+              content: SizedBox(
+                width: 360,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Укажите сумму и выберите платёжную систему. Оплата откроется по документации провайдера.',
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.35),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: topupAmountCtrl,
+                        decoration: const InputDecoration(labelText: 'Сумма (TJS)', border: OutlineInputBorder()),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
+                      ),
+                      const SizedBox(height: 12),
+                      Text('Способ оплаты', style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _PayProviderTile(
+                              selected: topupProvider == 'alif',
+                              label: 'Alif',
+                              hint: 'Карты, Alif Mobi',
+                              onTap: () => setLocal(() => topupProvider = 'alif'),
+                              child: Image.asset('assets/payments/alif.png', fit: BoxFit.contain),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _PayProviderTile(
+                              selected: topupProvider == 'smartpay',
+                              label: 'SmartPay',
+                              hint: 'Карты и кошельки',
+                              onTap: () => setLocal(() => topupProvider = 'smartpay'),
+                              child: SvgPicture.asset('assets/payments/smartpay.svg', fit: BoxFit.contain),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Текущий баланс: ${balance.toStringAsFixed(2)} TJS',
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: topupLoading ? null : () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Отмена'),
+                ),
+                FilledButton(
+                  onPressed: topupLoading
+                      ? null
+                      : () async {
+                          setLocal(() => topupLoading = true);
+                          setState(() => topupLoading = true);
+                          try {
+                            await _topup(closeDialog: () {
+                              if (dialogCtx.mounted) Navigator.of(dialogCtx).pop();
+                            });
+                          } finally {
+                            if (mounted) setState(() => topupLoading = false);
+                            if (dialogCtx.mounted) setLocal(() => topupLoading = false);
+                          }
+                        },
+                  child: topupLoading
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : Text(topupProvider == 'smartpay' ? 'Оплатить через SmartPay' : 'Оплатить через Alif'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _openWithdrawDialog(double balance) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !withdrawLoading,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            return AlertDialog(
+              title: const Text('Запрос на вывод средств'),
+              content: SizedBox(
+                width: 360,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Заявка уйдёт администратору. С баланса сумма спишется только после одобрения.',
+                        style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.35),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: withdrawAmountCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'Сумма (TJS)',
+                          helperText: 'Макс: ${balance.toStringAsFixed(2)}',
+                          border: const OutlineInputBorder(),
+                        ),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: withdrawNoteCtrl,
+                        decoration: const InputDecoration(labelText: 'Комментарий (необязательно)', border: OutlineInputBorder()),
+                        maxLength: 2000,
+                        maxLines: 3,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: withdrawLoading ? null : () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Отмена'),
+                ),
+                FilledButton(
+                  onPressed: withdrawLoading
+                      ? null
+                      : () async {
+                          setLocal(() => withdrawLoading = true);
+                          setState(() => withdrawLoading = true);
+                          try {
+                            await _withdraw(closeDialog: () {
+                              if (dialogCtx.mounted) Navigator.of(dialogCtx).pop();
+                            });
+                          } finally {
+                            if (mounted) setState(() => withdrawLoading = false);
+                            if (dialogCtx.mounted) setLocal(() => withdrawLoading = false);
+                          }
+                        },
+                  child: withdrawLoading
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('Отправить заявку'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -808,91 +1059,63 @@ else if (clientDebts.isEmpty)
     }
     return '—';
   }
+}
 
-  Widget _topupSheet(BuildContext context, double balance) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text('Пополнить баланс', style: TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 6),
-            Text(
-              'Онлайн-оплата через Alif: Korti Milli, Visa, Mastercard, Alif Mobi, Google Pay, операторы.',
-              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: topupAmountCtrl,
-              decoration: const InputDecoration(labelText: 'Сумма (TJS)', border: OutlineInputBorder()),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                FilledButton(
-                  onPressed: topupLoading ? null : _topup,
-                  child: topupLoading
-                      ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Оплатить через Alif'),
-                ),
-                TextButton(onPressed: topupLoading ? null : () => setState(() => topupOpen = false), child: const Text('Отмена')),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text('Текущий баланс: ${balance.toStringAsFixed(2)} TJS', style: TextStyle(color: cs.onSurfaceVariant)),
-          ],
-        ),
-      ),
-    );
-  }
+class _PayProviderTile extends StatelessWidget {
+  const _PayProviderTile({
+    required this.selected,
+    required this.label,
+    required this.hint,
+    required this.onTap,
+    required this.child,
+  });
 
-  Widget _withdrawSheet(BuildContext context, double balance) {
+  final bool selected;
+  final String label;
+  final String hint;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text('Запрос на вывод средств', style: TextStyle(fontWeight: FontWeight.w800)),
-            const SizedBox(height: 8),
-            Text(
-              'Заявка уйдёт администратору. С баланса сумма спишется только после одобрения.',
-              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant, height: 1.35),
+    return Material(
+      color: selected ? const Color(0xFF2563EB).withValues(alpha: 0.14) : Colors.white.withValues(alpha: 0.03),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 12, 10, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? const Color(0xFF2563EB) : Colors.white.withValues(alpha: 0.12),
+              width: selected ? 1.5 : 1,
             ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: withdrawAmountCtrl,
-              decoration: InputDecoration(labelText: 'Сумма (TJS)', helperText: 'Макс: ${balance.toStringAsFixed(2)}', border: const OutlineInputBorder()),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: withdrawNoteCtrl,
-              decoration: const InputDecoration(labelText: 'Комментарий (необязательно)', border: OutlineInputBorder()),
-              maxLength: 2000,
-              maxLines: 3,
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                FilledButton(
-                  onPressed: withdrawLoading ? null : _withdraw,
-                  child: withdrawLoading
-                      ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Отправить заявку'),
+          ),
+          child: Column(
+            children: [
+              Container(
+                height: 44,
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                TextButton(onPressed: withdrawLoading ? null : () => setState(() => withdrawOpen = false), child: const Text('Отмена')),
-              ],
-            ),
-          ],
+                child: child,
+              ),
+              const SizedBox(height: 8),
+              Text(label, style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: cs.onSurface)),
+              const SizedBox(height: 2),
+              Text(
+                hint,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant, height: 1.2),
+              ),
+            ],
+          ),
         ),
       ),
     );

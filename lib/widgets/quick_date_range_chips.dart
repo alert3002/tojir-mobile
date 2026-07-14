@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_shape.dart';
 
-/// Быстрый выбор: Сегодня, Неделя, Месяц, Период (кастом — через [onPeriod]).
+/// Быстрый выбор: Сегодня, Неделя, Месяц [, Период].
 class QuickDateRangeChips extends StatelessWidget {
   const QuickDateRangeChips({
     super.key,
@@ -12,6 +12,7 @@ class QuickDateRangeChips extends StatelessWidget {
     required this.onWeek,
     required this.onMonth,
     required this.onPeriod,
+    this.showPeriod = true,
   });
 
   final ColorScheme colorScheme;
@@ -20,6 +21,7 @@ class QuickDateRangeChips extends StatelessWidget {
   final VoidCallback onWeek;
   final VoidCallback onMonth;
   final VoidCallback onPeriod;
+  final bool showPeriod;
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +51,7 @@ class QuickDateRangeChips extends StatelessWidget {
         chip('today', 'Сегодня', onToday),
         chip('week', 'Неделя', onWeek),
         chip('month', 'Месяц', onMonth),
-        chip('period', 'Период', onPeriod),
+        if (showPeriod) chip('period', 'Период', onPeriod),
       ],
     );
   }

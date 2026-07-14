@@ -105,6 +105,16 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// Обновить профиль без экрана загрузки (не сбрасывает isReady).
+  Future<void> reloadUser() async {
+    if (_user == null) return;
+    await _api.refreshSession();
+    try {
+      await _reloadProfileFromServer(clearOnUnauthorized: false);
+    } catch (_) {}
+    notifyListeners();
+  }
+
   /// После возврата из фона: обновить JWT (мӯҳлат +14 рӯз) бе logout.
   Future<void> resumeFromBackground() async {
     if (_user == null) return;
@@ -157,6 +167,9 @@ class SessionController extends ChangeNotifier {
         body: {'phone': phone, 'register_as': registerAs},
         withAuth: false,
       );
+      if (res.statusCode >= 500) {
+        throw Exception('Сервер временно недоступен. Попробуйте позже.');
+      }
       if (res.statusCode != 200) {
         throw Exception(_parseError(res.body, fallback: 'Не удалось отправить код'));
       }
@@ -170,10 +183,10 @@ class SessionController extends ChangeNotifier {
         debugCode: kDebugMode && debug != null ? debug.toString() : null,
       );
     } on http.ClientException catch (e) {
-      throw Exception(
-        'Нет связи с сервером (часто на Flutter Web это CORS). '
-        'Решение: сервер бо DJANGO_DEBUG=1 (CORS барои localhost) ё барномаро дар Android/iOS иҷро кунед. ${e.message}',
-      );
+      throw Exception('Нет связи с сервером. Проверьте интернет.');
+    } catch (e) {
+      if (e is Exception) rethrow;
+      throw Exception('Не удалось отправить код. Попробуйте позже.');
     }
   }
 
@@ -190,10 +203,11 @@ class SessionController extends ChangeNotifier {
         body: {'phone': phone, 'code': c, 'ref': ref.trim()},
         withAuth: false,
       );
-    } on http.ClientException catch (e) {
-      throw Exception(
-        'Нет связи с сервером (Flutter Web / CORS ё интернет). ${e.message}',
-      );
+    } on http.ClientException {
+      throw Exception('Нет связи с сервером. Проверьте интернет.');
+    }
+    if (res.statusCode >= 500) {
+      throw Exception('Сервер временно недоступен. Попробуйте позже.');
     }
     if (res.statusCode != 200) {
       throw Exception(_parseError(res.body, fallback: 'Неверный код'));
@@ -269,11 +283,18 @@ class SessionController extends ChangeNotifier {
   }
 
   static String _parseError(String body, {String fallback = 'Ошибка'}) {
+    final raw = body.trim();
+    if (raw.isEmpty || raw.startsWith('<!DOCTYPE') || raw.startsWith('<html')) {
+      return fallback;
+    }
+    if (raw.contains('DioException') || raw.contains('Exception:')) {
+      return fallback;
+    }
     try {
       final m = jsonDecode(body);
       if (m is Map) {
         final d = m['detail'];
-        if (d is String) return d;
+        if (d is String && d.trim().isNotEmpty) return d.trim();
         final nfe = m['non_field_errors'];
         if (nfe is List && nfe.isNotEmpty) return nfe.first.toString();
         final p = m['phone'];
@@ -282,6 +303,7 @@ class SessionController extends ChangeNotifier {
         if (c is List && c.isNotEmpty) return c.first.toString();
       }
     } catch (_) {}
+    if (raw.length > 180) return fallback;
     return fallback;
   }
 }

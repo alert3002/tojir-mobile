@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 
 import '../auth/session_controller.dart';
 import '../theme/app_brand.dart';
-import '../theme/theme_controller.dart';
 import '../utils/permissions.dart';
 import '../utils/platform_info.dart';
 import 'tojir_logo.dart';
@@ -68,7 +67,7 @@ class AppHeader extends StatelessWidget {
     final iconColor = dark ? AppBrand.textMutedDark : cs.onSurfaceVariant;
 
     return Container(
-      padding: EdgeInsets.fromLTRB(16, topInset + 4, 16, 0),
+      padding: EdgeInsets.fromLTRB(8, topInset + 2, 8, 0),
       decoration: BoxDecoration(
         color: pageBg,
         border: Border(
@@ -76,11 +75,11 @@ class AppHeader extends StatelessWidget {
         ),
       ),
       child: SizedBox(
-        height: 56,
+        height: 52,
         child: Row(
           children: [
-            Flexible(fit: FlexFit.loose, child: TojirLogo(height: 28, dark: dark)),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
+            TojirLogo(height: 26, dark: dark),
             _HeaderIconButton(
               icon: Icons.menu_rounded,
               tooltip: 'Меню',
@@ -101,12 +100,6 @@ class AppHeader extends StatelessWidget {
                 onTap: () => Navigator.of(context).pushNamed('/tariffs'),
               ),
             _HeaderIconButton(
-              icon: Icons.lightbulb_outline_rounded,
-              tooltip: dark ? 'Светлая тема' : 'Тёмная тема',
-              color: iconColor,
-              onTap: () => context.read<ThemeController>().toggle(),
-            ),
-            _HeaderIconButton(
               icon: Icons.notifications_none_rounded,
               tooltip: 'Уведомления',
               color: iconColor,
@@ -122,23 +115,24 @@ class AppHeader extends StatelessWidget {
                 Navigator.of(context).pushNamed('/settings/notifications');
               },
             ),
-            const SizedBox(width: 4),
             if (!isIosApp)
               Flexible(
-                child: InkWell(
-                  onTap: () => Navigator.of(context).pushNamed('/profile'),
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-                    child: Text(
-                      '$bal TJS',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurface,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: InkWell(
+                    onTap: () => Navigator.of(context).pushNamed('/profile'),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                      child: Text(
+                        '$bal TJS',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: cs.onSurface,
+                        ),
                       ),
                     ),
                   ),
@@ -163,21 +157,21 @@ class _SubscriptionPill extends StatelessWidget {
     final fg = locked ? const Color(0xFFFB7185) : const Color(0xFFFBBF24);
     final bg = locked ? const Color(0xFFFB7185).withValues(alpha: 0.12) : const Color(0xFFFBBF24).withValues(alpha: 0.12);
     return Padding(
-      padding: const EdgeInsets.only(right: 4),
+      padding: const EdgeInsets.only(right: 2),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(999),
           child: Container(
-            constraints: const BoxConstraints(maxWidth: 120),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            constraints: const BoxConstraints(maxWidth: 96),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
             child: Text(
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg),
+              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg),
             ),
           ),
         ),
@@ -207,8 +201,8 @@ class _HeaderIconButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         onTap: onTap,
         child: SizedBox(
-          width: 40,
-          height: 40,
+          width: 36,
+          height: 36,
           child: Icon(icon, size: 20, color: color),
         ),
       ),

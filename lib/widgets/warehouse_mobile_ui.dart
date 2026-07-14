@@ -110,7 +110,9 @@ class WarehouseHero extends StatelessWidget {
                 if (!isSeller)
                   _HeroStat(label: 'На складе', value: '${formatRuInt(stats!.warehouseQty)} шт', dark: dark, cs: cs),
                 _HeroStat(
-                  label: isSeller ? 'В магазине' : 'В магазинах',
+                  label: isSeller
+                      ? 'В магазине'
+                      : (stats!.storeLabel?.isNotEmpty == true ? stats!.storeLabel! : 'В магазинах'),
                   value: '${formatRuInt(stats!.storeQty)} шт',
                   dark: dark,
                   cs: cs,
@@ -129,8 +131,8 @@ class WarehouseHero extends StatelessWidget {
           if (!isSeller && !showTrash) ...[
             const SizedBox(height: 10),
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 6,
+              runSpacing: 6,
               children: [
                 _HeroAction(label: 'Поступление', icon: Icons.add_rounded, tone: _HeroActionTone.blue, onTap: onArrivals),
                 _HeroAction(label: 'Перемещения', icon: Icons.swap_horiz_rounded, tone: _HeroActionTone.cyan, onTap: onTransfers),
@@ -151,12 +153,14 @@ class WarehouseStats {
     required this.storeQty,
     required this.lowStock,
     required this.stores,
+    this.storeLabel,
   });
   final int positions;
   final int warehouseQty;
   final int storeQty;
   final int lowStock;
   final int stores;
+  final String? storeLabel;
 }
 
 enum _HeroActionTone { blue, cyan, indigo }
@@ -214,20 +218,20 @@ class _HeroAction extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(8),
         child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(999),
+            borderRadius: BorderRadius.circular(8),
             color: bg,
             border: Border.all(color: border),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 14, color: fg),
-              const SizedBox(width: 6),
-              Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: fg)),
+              Icon(icon, size: 12, color: fg),
+              const SizedBox(width: 4),
+              Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg, height: 1.2)),
             ],
           ),
         ),
@@ -236,7 +240,7 @@ class _HeroAction extends StatelessWidget {
   }
 }
 
-/// Фильтры склада — как web `.tojir-warehouse-filters-card`.
+/// Фильтры склада — как web `.tojir-warehouse-filters`.
 class WarehouseFiltersCard extends StatelessWidget {
   const WarehouseFiltersCard({
     super.key,
@@ -253,9 +257,130 @@ class WarehouseFiltersCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      decoration: AppBrand.cardDecoration(context),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: dark ? AppBrand.darkCard : cs.surface,
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06)),
+      ),
       child: child,
+    );
+  }
+}
+
+class WarehouseStoreChips extends StatelessWidget {
+  const WarehouseStoreChips({
+    super.key,
+    required this.outlets,
+    required this.selectedOutletId,
+    required this.canAdd,
+    required this.addDisabled,
+    required this.onAdd,
+    required this.onSelectAll,
+    required this.onSelectOutlet,
+  });
+
+  final List<Map<String, dynamic>> outlets;
+  final int? selectedOutletId;
+  final bool canAdd;
+  final bool addDisabled;
+  final VoidCallback onAdd;
+  final VoidCallback onSelectAll;
+  final ValueChanged<int> onSelectOutlet;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (canAdd)
+          _StoreChip(
+            label: 'Магазин',
+            leading: Icons.add_rounded,
+            active: true,
+            addStyle: true,
+            onTap: addDisabled ? null : onAdd,
+          ),
+        if (outlets.isNotEmpty)
+          _StoreChip(
+            label: 'Все',
+            active: selectedOutletId == null,
+            onTap: onSelectAll,
+          ),
+        for (final o in outlets)
+          _StoreChip(
+            label: (o['name'] ?? 'Магазин').toString(),
+            active: selectedOutletId == _asInt(o['id']),
+            onTap: () {
+              final id = _asInt(o['id']);
+              if (id != null) onSelectOutlet(id);
+            },
+          ),
+      ],
+    );
+  }
+}
+
+class _StoreChip extends StatelessWidget {
+  const _StoreChip({
+    required this.label,
+    required this.active,
+    this.leading,
+    this.addStyle = false,
+    this.onTap,
+  });
+
+  final String label;
+  final bool active;
+  final IconData? leading;
+  final bool addStyle;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg;
+    final Color border;
+    final Color fg;
+    if (addStyle) {
+      bg = const Color(0xFF2563EB);
+      border = const Color(0xFF2563EB);
+      fg = Colors.white;
+    } else if (active) {
+      bg = const Color(0xFF2563EB);
+      border = const Color(0xFF2563EB);
+      fg = Colors.white;
+    } else {
+      bg = const Color(0xFF2563EB).withValues(alpha: 0.1);
+      border = const Color(0xFF2563EB).withValues(alpha: 0.4);
+      fg = const Color(0xFF93C5FD);
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            color: bg,
+            border: Border.all(color: border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (leading != null) ...[
+                Icon(leading, size: 12, color: fg),
+                const SizedBox(width: 4),
+              ],
+              Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg, height: 1.3)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -267,43 +392,69 @@ class WarehouseTrashTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(child: _TabBtn(label: 'Товары', active: !showTrash, onTap: () => onChanged(false))),
-        const SizedBox(width: 0),
-        Expanded(child: _TabBtn(label: 'Корзина', active: showTrash, onTap: () => onChanged(true))),
-      ],
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        children: [
+          Expanded(
+            child: _TabBtn(
+              label: 'Товары',
+              active: !showTrash,
+              roundedLeft: true,
+              onTap: () => onChanged(false),
+            ),
+          ),
+          Expanded(
+            child: _TabBtn(
+              label: 'Корзина',
+              active: showTrash,
+              roundedRight: true,
+              onTap: () => onChanged(true),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _TabBtn extends StatelessWidget {
-  const _TabBtn({required this.label, required this.active, required this.onTap});
+  const _TabBtn({
+    required this.label,
+    required this.active,
+    required this.onTap,
+    this.roundedLeft = false,
+    this.roundedRight = false,
+  });
   final String label;
   final bool active;
   final VoidCallback onTap;
+  final bool roundedLeft;
+  final bool roundedRight;
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Material(
-      color: active ? AppBrand.primaryBlue : (dark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.03)),
+      color: active ? const Color(0xFF2563EB) : (dark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.03)),
       child: InkWell(
         onTap: onTap,
-        child: Container(
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: active ? AppBrand.primaryBlue : (dark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.1)),
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: active ? Colors.white : (dark ? Colors.white.withValues(alpha: 0.75) : const Color(0xFF475569)),
+        child: SizedBox(
+          height: 28,
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: active ? Colors.white : (dark ? Colors.white.withValues(alpha: 0.65) : const Color(0xFF64748B)),
+              ),
             ),
           ),
         ),
@@ -312,7 +463,7 @@ class _TabBtn extends StatelessWidget {
   }
 }
 
-/// Карточка товара на мобильном складе — как web `.tojir-warehouse-mobile-item`.
+/// Карточка товара на мобильном складе — как web `.tojir-warehouse-item`.
 class WarehouseMobileProductCard extends StatelessWidget {
   const WarehouseMobileProductCard({
     super.key,
@@ -324,6 +475,8 @@ class WarehouseMobileProductCard extends StatelessWidget {
     required this.isSeller,
     required this.canSeeWarehouseQty,
     required this.unitLabel,
+    this.filterOutletId,
+    this.usdToTjs = 11.5,
     this.onTap,
     this.onDistribute,
     this.onEdit,
@@ -339,6 +492,8 @@ class WarehouseMobileProductCard extends StatelessWidget {
   final bool isSeller;
   final bool canSeeWarehouseQty;
   final String Function(String?) unitLabel;
+  final int? filterOutletId;
+  final double usdToTjs;
   final VoidCallback? onTap;
   final VoidCallback? onDistribute;
   final VoidCallback? onEdit;
@@ -347,23 +502,28 @@ class WarehouseMobileProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stock = _outletStock(record, warehouseOutlets);
+    final stock = _outletStock(record, warehouseOutlets, filterOutletId);
     final whQty = _asDouble(record['quantity']) ?? 0;
-    final total = canSeeWarehouseQty ? whQty + stock.inStores : stock.inStores;
+    final storeQty = filterOutletId != null
+        ? (_asDouble(record['outlet_stock_quantity']) ?? (stock.lines.isNotEmpty ? stock.lines.first.qty : 0))
+        : stock.inStores;
+    final total = canSeeWarehouseQty ? whQty + storeQty : storeQty;
     final u = unitLabel((record['unit'] ?? 'pcs').toString());
     final saleTjs = _asDouble(record['sale_price']) ?? 0;
     final isLow = !isSeller && whQty > 0 && whQty <= 5;
-    final showMultiOutlets = warehouseOutlets.length > 1;
+    final showOutlets = stock.lines.isNotEmpty;
+    final showDistribute = !isSeller && !showTrash && canSeeWarehouseQty && whQty > 0 && warehouseOutlets.isNotEmpty && onDistribute != null;
+    final fxUsd = usdToTjs > 0 && saleTjs > 0 ? saleTjs / usdToTjs : null;
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         onTap: onTap,
         child: Ink(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
             color: isLow
                 ? Color.alphaBlend(const Color(0xFFF97316).withValues(alpha: 0.08), dark ? AppBrand.darkRow : cs.surfaceContainer)
                 : (dark ? AppBrand.darkRow : cs.surfaceContainer),
@@ -378,7 +538,7 @@ class WarehouseMobileProductCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       (record['name'] ?? '—').toString(),
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, height: 1.35, color: cs.onSurface),
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, height: 1.35, color: cs.onSurface),
                     ),
                   ),
                   Row(
@@ -388,28 +548,29 @@ class WarehouseMobileProductCard extends StatelessWidget {
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                           tooltip: 'Восстановить',
                           onPressed: onRestore,
-                          icon: const Icon(Icons.undo_rounded, size: 20),
+                          icon: const Icon(Icons.undo_rounded, size: 18),
                         ),
-                      if (!showTrash && onEdit != null)
+                      if (!showTrash && !isSeller && onEdit != null)
                         IconButton(
                           visualDensity: VisualDensity.compact,
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                           tooltip: 'Изменить',
                           onPressed: onEdit,
-                          icon: Icon(Icons.edit_outlined, size: 20, color: cs.onSurface),
+                          icon: Icon(Icons.edit_outlined, size: 18, color: cs.onSurfaceVariant),
                         ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                        tooltip: showTrash ? 'Удалить навсегда' : 'Удалить',
-                        onPressed: onDelete,
-                        icon: const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFEF4444)),
-                      ),
+                      if (!isSeller || showTrash)
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                          tooltip: showTrash ? 'Удалить навсегда' : 'Удалить',
+                          onPressed: onDelete,
+                          icon: const Icon(Icons.delete_outline_rounded, size: 18, color: Color(0xFFEF4444)),
+                        ),
                     ],
                   ),
                 ],
@@ -427,27 +588,40 @@ class WarehouseMobileProductCard extends StatelessWidget {
               if (isSeller)
                 _SellerStockBar(
                   label: warehouseOutlets.length == 1 ? (warehouseOutlets.first['name'] ?? 'В магазине').toString() : 'В магазинах',
-                  qty: stock.inStores,
+                  qty: storeQty,
                   unit: u,
                   price: saleTjs,
+                  fxUsd: fxUsd,
                 )
               else
-                GridView.count(
-                  crossAxisCount: 2,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  mainAxisSpacing: 8,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 2.4,
+                Row(
                   children: [
-                    _MetaPair(dark: dark, label: 'продажа', value: saleTjs > 0 ? '${saleTjs.round()} с.' : '—'),
-                    if (canSeeWarehouseQty) _MetaPair(dark: dark, label: 'склад', value: '${whQty % 1 == 0 ? whQty.toInt() : whQty} $u'),
+                    Expanded(
+                      child: _MetaPair(
+                        dark: dark,
+                        label: 'продажа',
+                        value: saleTjs > 0 ? '${saleTjs.round()} с.' : '—',
+                        fxLine: fxUsd != null ? '≈ ${fxUsd.toStringAsFixed(2).replaceAll('.', ',')} USD' : null,
+                      ),
+                    ),
+                    if (canSeeWarehouseQty) ...[
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _MetaPair(
+                          dark: dark,
+                          label: 'склад',
+                          value: '${whQty % 1 == 0 ? whQty.toInt() : whQty} $u',
+                        ),
+                      ),
+                    ],
                   ],
                 ),
-              if (showMultiOutlets || (!isSeller && canSeeWarehouseQty && warehouseOutlets.isNotEmpty)) ...[
+              if (showOutlets) ...[
                 const SizedBox(height: 8),
                 Text(
-                  isSeller ? 'ПО МАГАЗИНАМ' : 'МАГАЗИНЫ',
+                  filterOutletId != null
+                      ? (stock.lines.first.name.toUpperCase())
+                      : (isSeller ? 'ПО МАГАЗИНАМ' : 'МАГАЗИНЫ'),
                   style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 0.04, color: cs.onSurfaceVariant),
                 ),
                 const SizedBox(height: 6),
@@ -468,14 +642,19 @@ class WarehouseMobileProductCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 _MetaPair(dark: dark, label: 'всего', value: '${total % 1 == 0 ? total.toInt() : total} $u', strong: true, wide: true),
               ],
-              if (!isSeller && !showTrash && canSeeWarehouseQty && whQty > 0 && warehouseOutlets.isNotEmpty && onDistribute != null) ...[
+              if (showDistribute) ...[
                 const SizedBox(height: 8),
                 SizedBox(
-                  height: 36,
+                  height: 30,
+                  width: double.infinity,
                   child: FilledButton(
                     onPressed: onDistribute,
-                    style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                    child: const Text('Распределить по магазинам', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF2563EB),
+                      padding: EdgeInsets.zero,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                    child: const Text('Распределить', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
                   ),
                 ),
               ],
@@ -488,11 +667,18 @@ class WarehouseMobileProductCard extends StatelessWidget {
 }
 
 class _SellerStockBar extends StatelessWidget {
-  const _SellerStockBar({required this.label, required this.qty, required this.unit, required this.price});
+  const _SellerStockBar({
+    required this.label,
+    required this.qty,
+    required this.unit,
+    required this.price,
+    this.fxUsd,
+  });
   final String label;
   final double qty;
   final String unit;
   final double price;
+  final double? fxUsd;
 
   @override
   Widget build(BuildContext context) {
@@ -519,7 +705,17 @@ class _SellerStockBar extends StatelessWidget {
               ],
             ),
           ),
-          Text(price > 0 ? '${price.round()} с.' : '—', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF86EFAC))),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(price > 0 ? '${price.round()} с.' : '—', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF86EFAC))),
+              if (fxUsd != null)
+                Text(
+                  '≈ ${fxUsd!.toStringAsFixed(2).replaceAll('.', ',')} USD',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: Colors.white.withValues(alpha: 0.55)),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -527,16 +723,24 @@ class _SellerStockBar extends StatelessWidget {
 }
 
 class _MetaPair extends StatelessWidget {
-  const _MetaPair({required this.dark, required this.label, required this.value, this.strong = false, this.wide = false});
+  const _MetaPair({
+    required this.dark,
+    required this.label,
+    required this.value,
+    this.fxLine,
+    this.strong = false,
+    this.wide = false,
+  });
   final bool dark;
   final String label;
   final String value;
+  final String? fxLine;
   final bool strong;
   final bool wide;
 
   @override
   Widget build(BuildContext context) {
-    final child = Container(
+    return Container(
       width: wide ? double.infinity : null,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
@@ -548,16 +752,30 @@ class _MetaPair extends StatelessWidget {
           Text(label, style: TextStyle(fontSize: 11, color: dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B))),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: TextStyle(fontSize: strong ? 13 : 12, fontWeight: strong ? FontWeight.w800 : FontWeight.w600, color: dark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  value,
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontSize: strong ? 13 : 12,
+                    fontWeight: strong ? FontWeight.w800 : FontWeight.w700,
+                    color: dark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A),
+                  ),
+                ),
+                if (fxLine != null)
+                  Text(
+                    fxLine!,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: dark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                  ),
+              ],
             ),
           ),
         ],
       ),
     );
-    return child;
   }
 }
 
@@ -601,7 +819,7 @@ class _OutletStockResult {
   final double inStores;
 }
 
-_OutletStockResult _outletStock(Map<String, dynamic> record, List<Map<String, dynamic>> outlets) {
+_OutletStockResult _outletStock(Map<String, dynamic> record, List<Map<String, dynamic>> outlets, [int? filterOutletId]) {
   final summary = (record['outlets_summary'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
   final byId = <String, double>{};
   for (final o in summary) {
@@ -612,6 +830,8 @@ _OutletStockResult _outletStock(Map<String, dynamic> record, List<Map<String, dy
   final lines = <_OutletStockLine>[];
   for (final o in outlets) {
     final id = o['id']?.toString() ?? '';
+    final oid = _asInt(o['id']);
+    if (filterOutletId != null && oid != filterOutletId) continue;
     final q = byId[id] ?? 0;
     inStores += q;
     lines.add(_OutletStockLine(id: o['id'], name: (o['name'] ?? 'Магазин').toString(), qty: q));
@@ -642,6 +862,12 @@ List<Widget> _buildTags(Map<String, dynamic> record, ColorScheme cs) {
   if ((record['ram'] ?? '').toString().isNotEmpty) out.add(tag(record['ram'].toString(), color: Colors.indigo.withValues(alpha: 0.2)));
   if ((record['size'] ?? '').toString().isNotEmpty) out.add(tag(record['size'].toString(), color: Colors.purple.withValues(alpha: 0.2)));
   return out;
+}
+
+int? _asInt(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse(v?.toString() ?? '');
 }
 
 double? _asDouble(dynamic v) {
