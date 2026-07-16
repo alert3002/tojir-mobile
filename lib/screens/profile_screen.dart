@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auth/session_controller.dart';
 import '../services/api_client.dart';
+import '../services/iap_service.dart';
 import '../theme/app_shape.dart';
 import '../utils/permissions.dart';
 import '../utils/platform_info.dart';
@@ -277,7 +278,8 @@ class ProfileScreenState extends State<ProfileScreen> {
       return;
     }
     if (isIosApp) {
-      _snack('Оплатите через банк и отправьте чек в Telegram или WhatsApp');
+      // iOS: fixed App Store pack (~$39) — not Alif/SmartPay.
+      await _topupViaAppleIap();
       return;
     }
     if (topupProvider != 'alif' && topupProvider != 'smartpay') {
@@ -313,6 +315,68 @@ class ProfileScreenState extends State<ProfileScreen> {
       );
     } catch (e) {
       _snack(_cleanMsg(e), error: true);
+    }
+  }
+
+  Future<void> _topupViaAppleIap() async {
+    if (topupLoading) return;
+    setState(() => topupLoading = true);
+    try {
+      final info = await IapService.instance.balanceTopupInfoFromApi();
+      if (info == null) {
+        throw Exception('Пакет пополнения App Store не настроен на сервере.');
+      }
+      final products = await IapService.instance.loadProducts({info.productId});
+      final product = products[info.productId];
+      if (product == null) {
+        throw Exception(
+          'Продукт ${info.productId} не найден в App Store. '
+          'Создайте Consumable IAP и отправьте на review.',
+        );
+      }
+      if (!mounted) return;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Пополнить баланс'),
+          content: Text(
+            'Будет зачислено ${info.creditTjs.toStringAsFixed(0)} TJS.\n'
+            'Оплата: ${product.price} через App Store.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Оплатить')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) {
+        if (mounted) setState(() => topupLoading = false);
+        return;
+      }
+
+      await IapService.instance.purchaseBalanceTopup(
+        product: product,
+        onSuccess: () async {
+          if (!mounted) return;
+          _snack('Баланс пополнен');
+          await context.read<SessionController>().reloadUser();
+          if (mounted) {
+            _syncFromUser();
+            setState(() => topupLoading = false);
+          }
+        },
+        onError: (msg) {
+          if (mounted) {
+            _snack(msg, error: true);
+            setState(() => topupLoading = false);
+          }
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        _snack(_cleanMsg(e), error: true);
+        setState(() => topupLoading = false);
+      }
     }
   }
 
@@ -496,22 +560,31 @@ class ProfileScreenState extends State<ProfileScreen> {
                           _kv('Склад', _sellerWarehouseLabel(u), cs),
                           _kv('Доступ в магазины', _allowedOutletNames(u), cs),
                         ],
-                        if (!isIosApp)
-                          _kv('Баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true)
-                        else if (balance > 0)
-                          _kv('Реферальный баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true),
+                        _kv('Баланс', '${balance.toStringAsFixed(2)} TJS', cs, strong: true),
                         const SizedBox(height: 10),
                         if (isIosApp) ...[
                           FilledButton.icon(
-                            onPressed: () => Navigator.of(context).pushNamed('/tariffs'),
-                            icon: const Icon(Icons.apple, size: 18),
-                            label: const Text('Подписка через App Store'),
+                            onPressed: topupLoading ? null : _topupViaAppleIap,
+                            icon: topupLoading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                  )
+                                : const Icon(Icons.add, size: 18),
+                            label: Text(topupLoading ? 'Оплата…' : 'Пополнить баланс'),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'На iPhone/iPad пополнение — пакет ~\$39 через App Store '
+                            '(зачисление 350 TJS). Подписка — в разделе «Тарифы».',
+                            style: TextStyle(fontSize: 13, height: 1.4, color: cs.onSurfaceVariant),
                           ),
                           const SizedBox(height: 10),
-                          Text(
-                            'Подписка TOJIr на iPhone/iPad оформляется только через App Store. '
-                            'Баланс используется для реферальных начислений и вывода, не для оплаты подписки.',
-                            style: TextStyle(fontSize: 13, height: 1.4, color: cs.onSurfaceVariant),
+                          OutlinedButton.icon(
+                            onPressed: () => Navigator.of(context).pushNamed('/tariffs'),
+                            icon: const Icon(Icons.apple, size: 18),
+                            label: const Text('Тарифы / подписка'),
                           ),
                           if (balance > 0) ...[
                             const SizedBox(height: 10),
@@ -527,12 +600,10 @@ class ProfileScreenState extends State<ProfileScreen> {
                             runSpacing: 10,
                             children: [
                               FilledButton.icon(
-                                onPressed: isIosApp
-                                    ? null
-                                    : () {
-                                        topupProvider = 'alif';
-                                        _openTopupDialog(balance);
-                                      },
+                                onPressed: () {
+                                  topupProvider = 'alif';
+                                  _openTopupDialog(balance);
+                                },
                                 icon: const Icon(Icons.add, size: 18),
                                 label: const Text('Пополнить баланс'),
                                 style: FilledButton.styleFrom(

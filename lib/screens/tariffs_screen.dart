@@ -73,20 +73,17 @@ class _TariffsScreenState extends State<TariffsScreen> {
 
   String _buyButtonLabel(Map<String, dynamic> t, bool activeNow) {
     if (activeNow) return 'Активен';
-    if (isIosApp && _isPaidTariff(t) && _tariffKind(t) == 'vip') {
-      return 'Скоро в App Store';
-    }
     return 'Активировать';
   }
 
   bool _buyButtonEnabled(Map<String, dynamic> t, bool canBuy, bool activeNow, int id) {
     if (!canBuy || activeNow || buyingId == id) return false;
-    // VIP IAP not configured yet — keep disabled on iOS.
-    if (isIosApp && _isPaidTariff(t) && _tariffKind(t) == 'vip') return false;
-    // Paid iOS: need Apple product ID in admin; StoreKit load happens on tap.
-    if (isIosApp && _isPaidTariff(t) && _appleProductId(t) == null) return false;
+    // VIP not offered on iPhone/iPad.
+    if (isIosApp && _tariffKind(t) == 'vip') return false;
     return true;
   }
+
+  double _userBalance(Map<String, dynamic>? user) => _asDouble(user?['balance']) ?? 0;
 
   @override
   void initState() {
@@ -102,7 +99,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
     });
   }
 
-  Future<void> _loadIapProducts() async {
+  Future<void> _loadIapProducts({bool showErrors = false}) async {
     try {
       final ids = await IapService.instance.productIdsFromApi();
       if (ids.isEmpty || !mounted) return;
@@ -115,7 +112,8 @@ class _TariffsScreenState extends State<TariffsScreen> {
       }
       if (mounted) setState(() => iapProducts = products);
     } catch (e) {
-      if (mounted) _snack('App Store: $e', warning: true);
+      // Preload failures are common in TestFlight before IAP is approved — don't spam.
+      if (showErrors && mounted) _snack('App Store: $e', warning: true);
     }
   }
 
@@ -223,7 +221,11 @@ class _TariffsScreenState extends State<TariffsScreen> {
   }
 
   List<Map<String, dynamic>> _visibleTariffs(Map<String, dynamic>? user, bool hasActive) {
-    final sorted = _sortedTariffs;
+    var sorted = _sortedTariffs;
+    // iPhone/iPad: no VIP tariff in the app.
+    if (isIosApp) {
+      sorted = sorted.where((t) => _tariffKind(t) != 'vip').toList();
+    }
     if (!hasActive) return sorted;
     final kind = _currentKind(user);
     final floor = kind == 'vip'
@@ -233,7 +235,9 @@ class _TariffsScreenState extends State<TariffsScreen> {
             : kind == 'trial'
                 ? 0
                 : 0;
-    return sorted.where((t) => _tariffRank(t) >= floor).toList();
+    // If user somehow has VIP on iOS, still show Standard+Trial for renew.
+    final effectiveFloor = (isIosApp && kind == 'vip') ? 1 : floor;
+    return sorted.where((t) => _tariffRank(t) >= effectiveFloor).toList();
   }
 
   ({double total, int baseProducts, int baseStores, int p, int s, int extraStores, int extraBlocks}) _calcVipPrice(
@@ -306,6 +310,8 @@ class _TariffsScreenState extends State<TariffsScreen> {
     final priceLabel = '${price.toStringAsFixed(2)} смн';
     final currentName = (subscription?['tariff_name'] ?? user?['subscription_tariff_name'] ?? '').toString();
     final daysLeft = _daysLeft(_expiresAt(user));
+    final balance = _userBalance(user);
+    final canPayFromBalance = !_isPaidTariff(t) || balance + 1e-9 >= price;
 
     if (hasActive) {
       final ok = await showDialog<bool>(
@@ -324,13 +330,13 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 Text('Лимиты: до ${t['max_products'] ?? '∞'} товаров, ${t['max_stores']} магазин(ов).'),
                 const SizedBox(height: 8),
                 Text(
-                  isIosApp && _isPaidTariff(t)
+                  isIosApp && _isPaidTariff(t) && !canPayFromBalance
                       ? 'Оплата через App Store (Apple).'
-                      : isIosApp
+                      : isIosApp && !_isPaidTariff(t)
                           ? 'Бесплатная активация на сервере Tojir.'
                           : 'Срок подписки продлится на ${t['duration_days']} дней от текущей даты окончания.',
                 ),
-                if (!isIosApp) ...[
+                if ((!isIosApp || canPayFromBalance) && _isPaidTariff(t)) ...[
                   const SizedBox(height: 12),
                   Container(
                     width: double.infinity,
@@ -358,28 +364,33 @@ class _TariffsScreenState extends State<TariffsScreen> {
       if (ok != true || !mounted) return;
     }
 
+    // iOS paid: balance first; App Store IAP only when balance is not enough.
     if (isIosApp && _isPaidTariff(t)) {
       if (_tariffKind(t) == 'vip') {
-        _snack('VIP в App Store скоро. Выберите тариф «Стандарт».', warning: true);
+        _snack('Тариф VIP недоступен на iPhone/iPad.', warning: true);
+        return;
+      }
+      if (canPayFromBalance) {
+        await _buyTariff(id, payload: payload, tariff: t);
         return;
       }
       final productId = _appleProductId(t);
       if (productId == null) {
         _snack(
-          'Укажите Apple product ID в админке для «${t['name']}».',
+          'Недостаточно баланса (${balance.toStringAsFixed(2)} TJS). '
+          'Пополните баланс в профиле или укажите Apple product ID в админке.',
           error: true,
         );
         return;
       }
-      // Same UX as Android "Активировать", payment sheet is Apple IAP.
       if (!iapProducts.containsKey(productId)) {
-        await _loadIapProducts();
+        await _loadIapProducts(showErrors: true);
         if (!mounted) return;
       }
       if (!iapProducts.containsKey(productId)) {
         _snack(
-          'Не удалось открыть оплату App Store. '
-          'Проверьте, что подписка отправлена на review вместе с приложением.',
+          'Недостаточно баланса и не удалось открыть оплату App Store. '
+          'Пополните баланс в профиле или проверьте IAP в App Store Connect.',
           error: true,
         );
         return;
@@ -388,7 +399,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
       return;
     }
 
-    await _buyTariff(id, payload: payload);
+    await _buyTariff(id, payload: payload, tariff: t);
   }
 
   Future<void> _restoreApplePurchases() async {
@@ -444,7 +455,11 @@ class _TariffsScreenState extends State<TariffsScreen> {
     );
   }
 
-  Future<void> _buyTariff(int tariffId, {Map<String, dynamic>? payload}) async {
+  Future<void> _buyTariff(
+    int tariffId, {
+    Map<String, dynamic>? payload,
+    Map<String, dynamic>? tariff,
+  }) async {
     setState(() => buyingId = tariffId);
     try {
       final api = context.read<ApiClient>();
@@ -463,6 +478,44 @@ class _TariffsScreenState extends State<TariffsScreen> {
         }
         if (detail.toLowerCase().contains('недостаточно средств')) {
           final missing = _asDouble(data['missing_amount']);
+          Map<String, dynamic>? t = tariff;
+          if (t == null) {
+            for (final row in tariffs) {
+              if (_asInt(row['id']) == tariffId) {
+                t = row;
+                break;
+              }
+            }
+          }
+          if (isIosApp && t != null) {
+            final productId = _appleProductId(t);
+            if (productId != null) {
+              final payApple = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Недостаточно средств'),
+                  content: Text(
+                    missing != null && missing > 0
+                        ? '$detail\n\nНе хватает: ${missing.toStringAsFixed(2)} TJS\n\nОплатить через App Store?'
+                        : '$detail\n\nОплатить через App Store?',
+                  ),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Закрыть')),
+                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('App Store')),
+                  ],
+                ),
+              );
+              if (payApple == true && mounted) {
+                if (!iapProducts.containsKey(productId)) {
+                  await _loadIapProducts(showErrors: true);
+                }
+                if (mounted && iapProducts.containsKey(productId)) {
+                  await _buyTariffViaApple(t, productId, payload: payload);
+                }
+              }
+              return;
+            }
+          }
           await showDialog<void>(
             context: context,
             builder: (ctx) => AlertDialog(
@@ -475,7 +528,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
                     Navigator.pop(ctx);
                     Navigator.of(context).pushNamed('/profile');
                   },
-                  child: Text(isIosApp ? 'Как пополнить' : 'Пополнить баланс'),
+                  child: const Text('Пополнить баланс'),
                 ),
               ],
             ),
@@ -683,10 +736,10 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 ),
               ],
             ),
-            if (isIosApp && applePrice != null && _isPaidTariff(t) && kind != 'vip') ...[
+            if (isIosApp && applePrice != null && _isPaidTariff(t) && kind != 'vip' && _userBalance(user) + 1e-9 < (_asDouble(t['price_somoni']) ?? 0)) ...[
               const SizedBox(height: 6),
               Text(
-                'К оплате в App Store: $applePrice',
+                'При нехватке баланса: App Store $applePrice',
                 style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55)),
               ),
             ],
@@ -740,14 +793,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
             FilledButton(
               onPressed: _buyButtonEnabled(t, canBuy, activeNow, id)
                   ? () {
-                      if (isIosApp && _tariffKind(t) == 'vip') {
-                        _snack('VIP в App Store скоро. Пока доступен тариф «Стандарт».', warning: true);
-                        return;
-                      }
-                      if (isIosApp) {
-                        _requestActivateTariff(t, user, hasActive);
-                        return;
-                      }
+                      if (isIosApp && _tariffKind(t) == 'vip') return;
                       if (_tariffKind(t) == 'vip') {
                         final calc = _calcVipPrice(t, vipProducts, vipStores);
                         _requestActivateTariff(
@@ -888,7 +934,8 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'На iPhone/iPad оплата тарифа открывается через App Store после «Активировать».',
+                  'На iPhone/iPad: при достаточном балансе списывается баланс; '
+                  'если баланса нет — оплата через App Store. Тариф VIP недоступен.',
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
                 ),
                 const SizedBox(height: 12),
