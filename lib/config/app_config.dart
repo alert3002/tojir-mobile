@@ -11,7 +11,7 @@ class AppConfig {
   AppConfig._();
 
   static const String _prodApi = 'https://api.tojir.tj/api/v1';
-  static const String _prodOffer = 'https://api.tojir.tj/offer/';
+  static const String _prodOffer = 'https://tojir.tj/offer';
 
   static const String _envApiBase = String.fromEnvironment('API_BASE');
   static const String _envApiHost = String.fromEnvironment('API_HOST');

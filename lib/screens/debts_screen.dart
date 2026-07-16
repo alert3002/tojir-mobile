@@ -356,6 +356,31 @@ class _DebtsScreenState extends State<DebtsScreen> {
   }
 
   Future<void> _openAdd() async {
+    await _loadOutlets();
+    if (!mounted) return;
+    if (outlets.isEmpty) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Сначала добавьте магазин'),
+          content: const Text(
+            'Чтобы добавить долг клиента, нужен хотя бы один магазин. '
+            'Создайте магазин, затем вернитесь в «Долги».',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Перейти в Магазины'),
+            ),
+          ],
+        ),
+      );
+      if (go == true && mounted) {
+        Navigator.of(context).pushNamed('/stores');
+      }
+      return;
+    }
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -1153,7 +1178,7 @@ class _DebtsScreenState extends State<DebtsScreen> {
                 emptyMessage: 'Нет записей. Долги с продажи создаются автоматически.',
                 titleTrailing: (!showTrash && !_isClient)
                     ? FilledButton.icon(
-                        onPressed: outlets.isEmpty ? null : _openAdd,
+                        onPressed: _openAdd,
                         icon: const Icon(Icons.add, size: 16),
                         label: const Text('Добавить'),
                         style: FilledButton.styleFrom(
@@ -1168,9 +1193,19 @@ class _DebtsScreenState extends State<DebtsScreen> {
               if (!_isClient && outlets.isEmpty && !loading)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    'Нет магазинов для вашего склада — создайте точку в разделе «Магазины».',
-                    style: TextStyle(color: cs.tertiary),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Нет магазинов — сначала добавьте магазин.',
+                        style: TextStyle(color: cs.tertiary),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: () => Navigator.of(context).pushNamed('/stores'),
+                        child: const Text('Перейти в Магазины'),
+                      ),
+                    ],
                   ),
                 ),
             ],

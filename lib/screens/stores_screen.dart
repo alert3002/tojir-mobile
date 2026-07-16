@@ -229,7 +229,7 @@ class _StoresScreenState extends State<StoresScreen> {
     final perms = u['allowed_perms'];
     if (perms is Map) {
       final stores = perms['stores'];
-      if (stores is Map) return stores['delete'] == true;
+      if (stores is Map) return stores['edit'] == true || stores['delete'] == true;
     }
     return false;
   }
@@ -337,7 +337,8 @@ class _StoresScreenState extends State<StoresScreen> {
         title: const Text('Удалить магазин?'),
         content: Text(
           'Магазин «$name» будет удалён безвозвратно.\n'
-          'Остатки товаров вернутся на склад. История продаж по этому магазину будет удалена.',
+          'Все остатки товаров (включая корзину) автоматически вернутся на склад.\n'
+          'История продаж по этому магазину будет удалена.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
@@ -388,6 +389,30 @@ class _StoresScreenState extends State<StoresScreen> {
             selectedOutletKey = 'all';
           });
           _loadProducts();
+        },
+      ),
+    );
+  }
+
+  Future<void> _openEditOutlet() async {
+    final rec = _selectedOutletRecord;
+    if (rec == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: RoundedRectangleBorder(borderRadius: AppShape.sheetTop),
+      builder: (ctx) => _EditOutletSheet(
+        outlet: rec,
+        onSaved: (updated) {
+          Navigator.pop(ctx);
+          final id = _asInt(updated['id']) ?? _asInt(rec['id']);
+          setState(() {
+            outlets = outlets.map((o) {
+              if (_asInt(o['id']) == id) return {...o, ...updated};
+              return o;
+            }).toList();
+          });
         },
       ),
     );
@@ -697,7 +722,21 @@ class _StoresScreenState extends State<StoresScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  if (_canManageOutlets && _selectedOutletRecord != null)
+                  if (_canManageOutlets && _selectedOutletRecord != null) ...[
+                    SizedBox(
+                      width: 46,
+                      height: 46,
+                      child: OutlinedButton(
+                        onPressed: _openEditOutlet,
+                        style: OutlinedButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          side: BorderSide(color: fieldBorder),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: Icon(Icons.edit_outlined, color: cs.onSurface.withValues(alpha: 0.85), size: 20),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     SizedBox(
                       width: 46,
                       height: 46,
@@ -713,7 +752,8 @@ class _StoresScreenState extends State<StoresScreen> {
                             : Icon(Icons.delete_outline_rounded, color: cs.error, size: 20),
                       ),
                     ),
-                  const SizedBox(width: 8),
+                    const SizedBox(width: 8),
+                  ],
                   FilledButton.icon(
                     onPressed: _storeLimitReached ? null : _openAddOutlet,
                     icon: const Icon(Icons.add, size: 18),
@@ -895,6 +935,100 @@ class _AddOutletSheet extends StatefulWidget {
 
   @override
   State<_AddOutletSheet> createState() => _AddOutletSheetState();
+}
+
+class _EditOutletSheet extends StatefulWidget {
+  const _EditOutletSheet({required this.outlet, required this.onSaved});
+
+  final Map<String, dynamic> outlet;
+  final void Function(Map<String, dynamic> updated) onSaved;
+
+  @override
+  State<_EditOutletSheet> createState() => _EditOutletSheetState();
+}
+
+class _EditOutletSheetState extends State<_EditOutletSheet> {
+  late final TextEditingController nameCtrl;
+  late final TextEditingController addressCtrl;
+  bool saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    nameCtrl = TextEditingController(text: (widget.outlet['name'] ?? '').toString());
+    addressCtrl = TextEditingController(text: (widget.outlet['address'] ?? '').toString());
+  }
+
+  @override
+  void dispose() {
+    nameCtrl.dispose();
+    addressCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final id = _asInt(widget.outlet['id']);
+    if (id == null) return;
+    if (nameCtrl.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Введите название')));
+      return;
+    }
+    setState(() => saving = true);
+    try {
+      final api = context.read<ApiClient>();
+      final res = await api.patch(
+        'inventory/outlets/$id/',
+        body: {
+          'name': nameCtrl.text.trim(),
+          'address': addressCtrl.text.trim(),
+        },
+      );
+      if (!mounted) return;
+      final data = _tryJsonMap(res.body);
+      if (res.statusCode != 200) {
+        throw Exception(_firstApiError(data));
+      }
+      widget.onSaved(data.isNotEmpty ? data : {'id': id, 'name': nameCtrl.text.trim(), 'address': addressCtrl.text.trim()});
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Магазин изменён')));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: bottom + 16),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(child: Container(width: 40, height: 4, decoration: AppShape.sheetHandle(cs.outlineVariant))),
+            const SizedBox(height: 12),
+            Text('Изменить магазин', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Название магазина', border: OutlineInputBorder())),
+            const SizedBox(height: 12),
+            TextField(controller: addressCtrl, decoration: const InputDecoration(labelText: 'Адрес (необязательно)', border: OutlineInputBorder())),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: saving ? null : _save,
+              child: saving
+                  ? const SizedBox(height: 22, width: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Сохранить'),
+            ),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _AddOutletSheetState extends State<_AddOutletSheet> {

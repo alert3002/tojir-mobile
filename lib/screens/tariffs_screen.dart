@@ -71,19 +71,32 @@ class _TariffsScreenState extends State<TariffsScreen> {
 
   bool _isPaidTariff(Map<String, dynamic> t) => (_asDouble(t['price_somoni']) ?? 0) > 0;
 
+  bool _iapReady(Map<String, dynamic> t) {
+    final productId = _appleProductId(t);
+    if (productId == null) return false;
+    return iapProducts.containsKey(productId);
+  }
+
   String _buyButtonLabel(Map<String, dynamic> t, bool activeNow) {
     if (activeNow) return 'Активен';
     if (!isIosApp) return 'Активировать';
     if (!_isPaidTariff(t)) return 'Активировать';
+    if (_tariffKind(t) == 'vip') return 'Скоро в App Store';
     final productId = _appleProductId(t);
     if (productId == null) return 'Скоро в App Store';
     final product = iapProducts[productId];
-    return product?.price ?? 'App Store';
+    if (product != null) return product.price;
+    // Product ID in admin but StoreKit has not returned it yet (IAP not approved / not linked).
+    return 'Загрузка App Store…';
   }
 
   bool _buyButtonEnabled(Map<String, dynamic> t, bool canBuy, bool activeNow, int id) {
     if (!canBuy || activeNow || buyingId == id) return false;
-    if (isIosApp && _isPaidTariff(t) && _appleProductId(t) == null) return false;
+    if (isIosApp && _isPaidTariff(t)) {
+      if (_tariffKind(t) == 'vip') return false;
+      // Do not allow tap until StoreKit actually returns the product — avoids Apple review error.
+      if (!_iapReady(t)) return false;
+    }
     return true;
   }
 
@@ -105,8 +118,21 @@ class _TariffsScreenState extends State<TariffsScreen> {
     try {
       final ids = await IapService.instance.productIdsFromApi();
       if (ids.isEmpty || !mounted) return;
-      final products = await IapService.instance.loadProducts(ids);
+      var products = await IapService.instance.loadProducts(ids);
+      if (products.isEmpty) {
+        // StoreKit often needs a moment after install / when IAP just linked to the app.
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        if (!mounted) return;
+        products = await IapService.instance.loadProducts(ids);
+      }
       if (mounted) setState(() => iapProducts = products);
+      if (products.isEmpty && mounted) {
+        _snack(
+          'Тариф App Store ещё не доступен на устройстве. '
+          'В App Store Connect отправьте подписку на проверку вместе с приложением.',
+          warning: true,
+        );
+      }
     } catch (e) {
       if (mounted) _snack('App Store: $e', warning: true);
     }
@@ -352,9 +378,27 @@ class _TariffsScreenState extends State<TariffsScreen> {
     }
 
     if (isIosApp && _isPaidTariff(t)) {
+      if (_tariffKind(t) == 'vip') {
+        _snack('VIP в App Store скоро. Выберите тариф «Стандарт».', warning: true);
+        return;
+      }
       final productId = _appleProductId(t);
-      if (productId != null) {
+      if (productId != null && _iapReady(t)) {
         await _buyTariffViaApple(t, productId, payload: payload);
+        return;
+      }
+      if (productId != null && !_iapReady(t)) {
+        await _loadIapProducts();
+        if (!mounted) return;
+        if (_iapReady(t)) {
+          await _buyTariffViaApple(t, productId, payload: payload);
+          return;
+        }
+        _snack(
+          'Подписка ещё не доступна в App Store на этом устройстве. '
+          'Проверьте, что IAP отправлен на review вместе с приложением.',
+          error: true,
+        );
         return;
       }
       _snack(
