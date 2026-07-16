@@ -71,32 +71,20 @@ class _TariffsScreenState extends State<TariffsScreen> {
 
   bool _isPaidTariff(Map<String, dynamic> t) => (_asDouble(t['price_somoni']) ?? 0) > 0;
 
-  bool _iapReady(Map<String, dynamic> t) {
-    final productId = _appleProductId(t);
-    if (productId == null) return false;
-    return iapProducts.containsKey(productId);
-  }
-
   String _buyButtonLabel(Map<String, dynamic> t, bool activeNow) {
     if (activeNow) return 'Активен';
-    if (!isIosApp) return 'Активировать';
-    if (!_isPaidTariff(t)) return 'Активировать';
-    if (_tariffKind(t) == 'vip') return 'Скоро в App Store';
-    final productId = _appleProductId(t);
-    if (productId == null) return 'Скоро в App Store';
-    final product = iapProducts[productId];
-    if (product != null) return product.price;
-    // Product ID in admin but StoreKit has not returned it yet (IAP not approved / not linked).
-    return 'Загрузка App Store…';
+    if (isIosApp && _isPaidTariff(t) && _tariffKind(t) == 'vip') {
+      return 'Скоро в App Store';
+    }
+    return 'Активировать';
   }
 
   bool _buyButtonEnabled(Map<String, dynamic> t, bool canBuy, bool activeNow, int id) {
     if (!canBuy || activeNow || buyingId == id) return false;
-    if (isIosApp && _isPaidTariff(t)) {
-      if (_tariffKind(t) == 'vip') return false;
-      // Do not allow tap until StoreKit actually returns the product — avoids Apple review error.
-      if (!_iapReady(t)) return false;
-    }
+    // VIP IAP not configured yet — keep disabled on iOS.
+    if (isIosApp && _isPaidTariff(t) && _tariffKind(t) == 'vip') return false;
+    // Paid iOS: need Apple product ID in admin; StoreKit load happens on tap.
+    if (isIosApp && _isPaidTariff(t) && _appleProductId(t) == null) return false;
     return true;
   }
 
@@ -126,13 +114,6 @@ class _TariffsScreenState extends State<TariffsScreen> {
         products = await IapService.instance.loadProducts(ids);
       }
       if (mounted) setState(() => iapProducts = products);
-      if (products.isEmpty && mounted) {
-        _snack(
-          'Тариф App Store ещё не доступен на устройстве. '
-          'В App Store Connect отправьте подписку на проверку вместе с приложением.',
-          warning: true,
-        );
-      }
     } catch (e) {
       if (mounted) _snack('App Store: $e', warning: true);
     }
@@ -369,7 +350,7 @@ class _TariffsScreenState extends State<TariffsScreen> {
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: Text(isIosApp && _isPaidTariff(t) ? 'Купить в App Store' : 'Активировать'),
+              child: const Text('Активировать'),
             ),
           ],
         ),
@@ -383,29 +364,27 @@ class _TariffsScreenState extends State<TariffsScreen> {
         return;
       }
       final productId = _appleProductId(t);
-      if (productId != null && _iapReady(t)) {
-        await _buyTariffViaApple(t, productId, payload: payload);
-        return;
-      }
-      if (productId != null && !_iapReady(t)) {
-        await _loadIapProducts();
-        if (!mounted) return;
-        if (_iapReady(t)) {
-          await _buyTariffViaApple(t, productId, payload: payload);
-          return;
-        }
+      if (productId == null) {
         _snack(
-          'Подписка ещё не доступна в App Store на этом устройстве. '
-          'Проверьте, что IAP отправлен на review вместе с приложением.',
+          'Укажите Apple product ID в админке для «${t['name']}».',
           error: true,
         );
         return;
       }
-      _snack(
-        'Укажите Apple product ID в админке для «${t['name']}» '
-        '(напр. tj.tojir.tariff.standard.monthly).',
-        error: true,
-      );
+      // Same UX as Android "Активировать", payment sheet is Apple IAP.
+      if (!iapProducts.containsKey(productId)) {
+        await _loadIapProducts();
+        if (!mounted) return;
+      }
+      if (!iapProducts.containsKey(productId)) {
+        _snack(
+          'Не удалось открыть оплату App Store. '
+          'Проверьте, что подписка отправлена на review вместе с приложением.',
+          error: true,
+        );
+        return;
+      }
+      await _buyTariffViaApple(t, productId, payload: payload);
       return;
     }
 
@@ -635,11 +614,10 @@ class _TariffsScreenState extends State<TariffsScreen> {
     final vipCalc = kind == 'vip' ? _calcVipPrice(t, vipProducts, vipStores) : null;
     final appleId = _appleProductId(t);
     final applePrice = (isIosApp && appleId != null) ? iapProducts[appleId]?.price : null;
-    final priceText = isIosApp && _isPaidTariff(t)
-        ? (applePrice ?? 'App Store')
-        : kind == 'vip'
-            ? '${vipCalc!.total.toStringAsFixed(2)} смн'
-            : '${(_asDouble(t['price_somoni']) ?? 0).toStringAsFixed(2)} смн';
+    // Same price UI as Android (смн). Apple sheet shows real IAP price on pay.
+    final priceText = kind == 'vip'
+        ? '${(isIosApp ? (_asDouble(t['price_somoni']) ?? 0) : vipCalc!.total).toStringAsFixed(2)} смн'
+        : '${(_asDouble(t['price_somoni']) ?? 0).toStringAsFixed(2)} смн';
     final duration = _asInt(t['duration_days']) ?? 0;
     final maxProducts = t['max_products'];
     final maxStores = _asInt(t['max_stores']) ?? 0;
@@ -705,6 +683,13 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 ),
               ],
             ),
+            if (isIosApp && applePrice != null && _isPaidTariff(t) && kind != 'vip') ...[
+              const SizedBox(height: 6),
+              Text(
+                'К оплате в App Store: $applePrice',
+                style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55)),
+              ),
+            ],
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
@@ -899,11 +884,11 @@ class _TariffsScreenState extends State<TariffsScreen> {
                 OutlinedButton.icon(
                   onPressed: buyingId == -1 ? null : _restoreApplePurchases,
                   icon: const Icon(Icons.restore_rounded, size: 18),
-                  label: const Text('Восстановить покупки App Store'),
+                  label: const Text('Восстановить покупки'),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Подписка на iOS оформляется только через App Store (In-App Purchase).',
+                  'На iPhone/iPad оплата тарифа открывается через App Store после «Активировать».',
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant, height: 1.35),
                 ),
                 const SizedBox(height: 12),
