@@ -12,6 +12,10 @@ class IapService {
   IapService._();
   static final IapService instance = IapService._();
 
+  /// Должен совпадать с App Store Connect + `APPLE_IAP_BALANCE_PRODUCT_ID` на сервере.
+  static const defaultBalanceProductId = 'tj.tojir.balance.topup.39';
+  static const defaultBalanceCreditTjs = 350.0;
+
   final InAppPurchase _iap = InAppPurchase.instance;
   StreamSubscription<List<PurchaseDetails>>? _sub;
   ApiClient? _api;
@@ -23,8 +27,8 @@ class IapService {
   bool get available => isIosApp && !kIsWeb;
 
   Future<void> init(ApiClient api) async {
-    if (!available) return;
     _api = api;
+    if (!available) return;
     final ok = await _iap.isAvailable();
     if (!ok) return;
     _sub ??= _iap.purchaseStream.listen(_onPurchaseUpdate, onError: (Object e) {
@@ -39,13 +43,13 @@ class IapService {
 
   Future<Set<String>> productIdsFromApi() async {
     final api = _api;
-    if (api == null) return {};
+    if (api == null) return {defaultBalanceProductId};
     final res = await api.get('iap/apple/products/');
-    if (res.statusCode != 200) return {};
+    if (res.statusCode != 200) return {defaultBalanceProductId};
     final data = jsonDecode(res.body);
-    if (data is! Map) return {};
+    if (data is! Map) return {defaultBalanceProductId};
     final products = data['products'];
-    if (products is! List) return {};
+    if (products is! List) return {defaultBalanceProductId};
     final ids = <String>{};
     for (final row in products) {
       if (row is Map) {
@@ -53,28 +57,37 @@ class IapService {
         if (id.isNotEmpty) ids.add(id);
       }
     }
+    ids.add(defaultBalanceProductId);
     return ids;
   }
 
-  /// Balance top-up consumable product id + credit from API.
-  Future<({String productId, double creditTjs})?> balanceTopupInfoFromApi() async {
+  /// Balance top-up consumable: из API или дефолт (если прод ещё не задеплоен).
+  Future<({String productId, double creditTjs})> balanceTopupInfoFromApi() async {
     final api = _api;
-    if (api == null) return null;
-    final res = await api.get('iap/apple/products/');
-    if (res.statusCode != 200) return null;
-    final data = jsonDecode(res.body);
-    if (data is! Map) return null;
-    final products = data['products'];
-    if (products is! List) return null;
-    for (final row in products) {
-      if (row is! Map) continue;
-      if ((row['kind'] ?? '').toString() != 'balance_topup') continue;
-      final id = (row['apple_product_id'] ?? '').toString().trim();
-      if (id.isEmpty) continue;
-      final credit = double.tryParse(row['credit_tjs']?.toString() ?? '') ?? 350;
-      return (productId: id, creditTjs: credit);
+    if (api != null) {
+      try {
+        final res = await api.get('iap/apple/products/');
+        if (res.statusCode == 200) {
+          final data = jsonDecode(res.body);
+          if (data is Map) {
+            final products = data['products'];
+            if (products is List) {
+              for (final row in products) {
+                if (row is! Map) continue;
+                if ((row['kind'] ?? '').toString() != 'balance_topup') continue;
+                final id = (row['apple_product_id'] ?? '').toString().trim();
+                if (id.isEmpty) continue;
+                final credit = double.tryParse(row['credit_tjs']?.toString() ?? '') ?? defaultBalanceCreditTjs;
+                return (productId: id, creditTjs: credit);
+              }
+            }
+          }
+        }
+      } catch (_) {
+        // fallback below
+      }
     }
-    return null;
+    return (productId: defaultBalanceProductId, creditTjs: defaultBalanceCreditTjs);
   }
 
   Future<Map<String, ProductDetails>> loadProducts(Set<String> ids) async {
@@ -165,6 +178,12 @@ class IapService {
     if (_pendingBalance) {
       final res = await api.post('iap/apple/verify-balance/', body: body);
       final data = jsonDecode(res.body);
+      if (res.statusCode == 404) {
+        throw Exception(
+          'На сервере нет endpoint verify-balance. '
+          'Задеплойте backend на api.tojir.tj и добавьте APPLE_IAP_BALANCE_PRODUCT_ID.',
+        );
+      }
       if (res.statusCode != 200) {
         final detail = data is Map ? (data['detail'] ?? 'Ошибка сервера') : 'Ошибка сервера';
         throw Exception(detail.toString());

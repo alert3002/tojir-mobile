@@ -322,16 +322,15 @@ class ProfileScreenState extends State<ProfileScreen> {
     if (topupLoading) return;
     setState(() => topupLoading = true);
     try {
+      await IapService.instance.init(context.read<ApiClient>());
       final info = await IapService.instance.balanceTopupInfoFromApi();
-      if (info == null) {
-        throw Exception('Пакет пополнения App Store не настроен на сервере.');
-      }
       final products = await IapService.instance.loadProducts({info.productId});
       final product = products[info.productId];
       if (product == null) {
         throw Exception(
-          'Продукт ${info.productId} не найден в App Store. '
-          'Создайте Consumable IAP и отправьте на review.',
+          'Продукт ${info.productId} не найден в App Store.\n'
+          'В App Store Connect создайте Consumable IAP (~\$39) с этим ID '
+          'и отправьте вместе с приложением.',
         );
       }
       if (!mounted) return;
