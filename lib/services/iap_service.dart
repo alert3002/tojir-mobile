@@ -92,11 +92,32 @@ class IapService {
 
   Future<Map<String, ProductDetails>> loadProducts(Set<String> ids) async {
     if (!available || ids.isEmpty) return {};
-    final response = await _iap.queryProductDetails(ids);
+    ProductDetailsResponse response;
+    try {
+      response = await _iap.queryProductDetails(ids);
+    } catch (e) {
+      throw Exception(_storeKitHint(e.toString()));
+    }
     if (response.error != null) {
-      throw Exception(response.error!.message);
+      throw Exception(_storeKitHint(response.error!.message));
     }
     return {for (final p in response.productDetails) p.id: p};
+  }
+
+  static String _storeKitHint(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('failed to get response') ||
+        lower.contains('storekit') ||
+        lower.contains('platform')) {
+      return 'App Store не ответил (StoreKit).\n\n'
+          'Проверьте в App Store Connect:\n'
+          '1) Consumable IAP: tj.tojir.balance.topup.39 (~\$39.99)\n'
+          '2) Подписка: tj.tojir.tariff.standard.monthly\n'
+          '3) Paid Apps Agreement подписан\n'
+          '4) IAP добавлен к версии приложения и отправлен на review\n'
+          '5) Тест на реальном iPhone (не симулятор), интернет включён';
+    }
+    return raw;
   }
 
   Future<void> purchaseSubscription({
