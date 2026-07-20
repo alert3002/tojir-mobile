@@ -585,14 +585,6 @@ class ProfileScreenState extends State<ProfileScreen> {
                             icon: const Icon(Icons.apple, size: 18),
                             label: const Text('Тарифы / подписка'),
                           ),
-                          if (balance > 0) ...[
-                            const SizedBox(height: 10),
-                            OutlinedButton.icon(
-                              onPressed: () => _openWithdrawDialog(balance),
-                              icon: const Icon(Icons.remove, size: 18),
-                              label: const Text('Запросить вывод'),
-                            ),
-                          ],
                         ] else
                           Wrap(
                             spacing: 10,
