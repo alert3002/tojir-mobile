@@ -92,16 +92,26 @@ class IapService {
 
   Future<Map<String, ProductDetails>> loadProducts(Set<String> ids) async {
     if (!available || ids.isEmpty) return {};
-    ProductDetailsResponse response;
-    try {
-      response = await _iap.queryProductDetails(ids);
-    } catch (e) {
-      throw Exception(_storeKitHint(e.toString()));
+    if (!await _iap.isAvailable()) {
+      throw Exception('App Store временно недоступен. Повторите попытку через минуту.');
     }
-    if (response.error != null) {
-      throw Exception(_storeKitHint(response.error!.message));
+
+    Object? lastError;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final response = await _iap.queryProductDetails(ids);
+        if (response.error == null) {
+          return {for (final p in response.productDetails) p.id: p};
+        }
+        lastError = response.error!.message;
+      } catch (e) {
+        lastError = e;
+      }
+      if (attempt < 2) {
+        await Future<void>.delayed(Duration(milliseconds: 700 * (attempt + 1)));
+      }
     }
-    return {for (final p in response.productDetails) p.id: p};
+    throw Exception(_storeKitHint(lastError?.toString() ?? 'StoreKit error'));
   }
 
   static String _storeKitHint(String raw) {
@@ -109,13 +119,7 @@ class IapService {
     if (lower.contains('failed to get response') ||
         lower.contains('storekit') ||
         lower.contains('platform')) {
-      return 'App Store не ответил (StoreKit).\n\n'
-          'Проверьте в App Store Connect:\n'
-          '1) Consumable IAP: tj.tojir.balance.topup.39 (~\$39.99)\n'
-          '2) Подписка: tj.tojir.tariff.standard.monthly\n'
-          '3) Paid Apps Agreement подписан\n'
-          '4) IAP добавлен к версии приложения и отправлен на review\n'
-          '5) Тест на реальном iPhone (не симулятор), интернет включён';
+      return 'Не удалось связаться с App Store. Проверьте интернет и повторите попытку через минуту.';
     }
     return raw;
   }
