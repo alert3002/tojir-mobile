@@ -24,7 +24,8 @@ bool sellerCanAccessSection(Map<String, dynamic> user, String sectionKey, Map<St
     if (sectionIsAllowed(perms, 'history')) return true;
     return ['sales', 'returns', 'transfers', 'debts', 'expenses'].any((k) {
       final p = perms?[k];
-      return p is Map && p['view'] == true;
+      return p is Map &&
+          (p['view'] == true || p['create'] == true || p['edit'] == true || p['delete'] == true);
     });
   }
   return sectionIsAllowed(perms, sectionKey);

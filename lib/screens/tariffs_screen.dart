@@ -383,14 +383,19 @@ class _TariffsScreenState extends State<TariffsScreen> {
         );
         return;
       }
-      if (!iapProducts.containsKey(productId)) {
-        await _loadIapProducts(showErrors: true);
+      // App Review sandbox: products may appear a few seconds late.
+      for (var attempt = 0; attempt < 3; attempt++) {
+        if (iapProducts.containsKey(productId)) break;
+        await _loadIapProducts(showErrors: attempt == 2);
         if (!mounted) return;
+        if (!iapProducts.containsKey(productId) && attempt < 2) {
+          await Future<void>.delayed(Duration(milliseconds: 700 * (attempt + 1)));
+        }
       }
       if (!iapProducts.containsKey(productId)) {
         _snack(
-          'Недостаточно баланса и не удалось открыть оплату App Store. '
-          'Пополните баланс в профиле или проверьте IAP в App Store Connect.',
+          'Недостаточно баланса (${balance.toStringAsFixed(0)} TJS). '
+          'Пополните баланс в профиле или повторите оплату через App Store через минуту.',
           error: true,
         );
         return;
@@ -430,7 +435,10 @@ class _TariffsScreenState extends State<TariffsScreen> {
     if (id == null) return;
     final product = iapProducts[productId];
     if (product == null) {
-      _snack('Продукт не найден в App Store. Проверьте App Store Connect.', error: true);
+      _snack(
+        'Оплата App Store временно недоступна. Повторите через минуту.',
+        error: true,
+      );
       return;
     }
 

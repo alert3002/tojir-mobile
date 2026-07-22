@@ -327,10 +327,10 @@ class ProfileScreenState extends State<ProfileScreen> {
       final products = await IapService.instance.loadProducts({info.productId});
       final product = products[info.productId];
       if (product == null) {
+        // Soft message for App Review / users (do not expose ASC developer steps).
         throw Exception(
-          'Продукт ${info.productId} не найден в App Store.\n'
-          'В App Store Connect создайте Consumable IAP (~\$39) с этим ID '
-          'и отправьте вместе с приложением.',
+          'Оплата App Store временно недоступна. '
+          'Проверьте интернет и повторите через минуту.',
         );
       }
       if (!mounted) return;

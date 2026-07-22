@@ -142,8 +142,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return AppScaffold(
         child: _SellerHome(
           user: u,
-          usdToTjs: _usdToTjs,
-          canSeeCourse: canSeeCourse,
+          debtWe: debtWe,
+          debtCo: debtCo,
           onNavigate: _go,
           onRefresh: _loadAll,
         ),
@@ -482,47 +482,40 @@ class _ClientHome extends StatelessWidget {
 class _SellerHome extends StatelessWidget {
   const _SellerHome({
     required this.user,
-    required this.usdToTjs,
-    required this.canSeeCourse,
+    required this.debtWe,
+    required this.debtCo,
     required this.onNavigate,
     required this.onRefresh,
   });
 
   final Map<String, dynamic> user;
-  final double? usdToTjs;
-  final bool canSeeCourse;
+  final String? debtWe;
+  final String? debtCo;
   final void Function(String route) onNavigate;
   final Future<void> Function() onRefresh;
 
   @override
   Widget build(BuildContext context) {
-    final salesCard = getSellerSalesCard(user);
-    final secondary = getSellerSecondaryCards(user);
-    final outlet = sellerOutletText(user);
-    final bottomPad = salesCard != null ? 100.0 : 12.0;
-
+    final cards = getBusinessmanGridCards(user).where((card) => card.route != '/sales').toList();
+    final canSell = canAccessSection(user, 'sales', null);
     return Stack(
       children: [
         RefreshIndicator(
           onRefresh: onRefresh,
           child: ListView(
-            padding: EdgeInsets.fromLTRB(12, 6, 12, bottomPad),
+            padding: EdgeInsets.fromLTRB(12, 8, 12, canSell ? 100 : 16),
             children: [
-              if (canSeeCourse) ...[
-                _RatePill(value: usdToTjs, onTap: () => onNavigate('/course')),
-                const SizedBox(height: 6),
-              ],
-              _WelcomeHeader(name: sellerDisplayName(user), outlet: outlet),
-              const SizedBox(height: 10),
-              if (secondary.isNotEmpty)
-                _SellerMenuGrid(
-                  cards: secondary,
+              if (cards.isNotEmpty)
+                BusinessmanHomeGrid(
+                  cards: cards,
+                  debtWe: debtWe,
+                  debtCo: debtCo,
                   onTap: onNavigate,
                 ),
             ],
           ),
         ),
-        if (salesCard != null)
+        if (canSell)
           Positioned(
             left: 12,
             right: 12,
@@ -530,6 +523,67 @@ class _SellerHome extends StatelessWidget {
             child: _SellerHero(onTap: () => onNavigate('/sales')),
           ),
       ],
+    );
+  }
+}
+
+class _SellerHero extends StatelessWidget {
+  const _SellerHero({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF16A34A), Color(0xFF22C55E), Color(0xFF4ADE80)],
+              stops: [0.0, 0.55, 1.0],
+            ),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF22C55E).withValues(alpha: 0.42),
+                blurRadius: 28,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.92),
+                ),
+                child: const Icon(Icons.attach_money_rounded, color: Color(0xFF166534), size: 26),
+              ),
+              const SizedBox(width: 13),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Начать продажу', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white)),
+                    SizedBox(height: 2),
+                    Text('Оформить чек и принять оплату', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: Colors.white.withValues(alpha: 0.9)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -674,61 +728,6 @@ class _SellerMenuGrid extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _SellerHero extends StatelessWidget {
-  const _SellerHero({required this.onTap});
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: Ink(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF22C55E), Color(0xFF16A34A), Color(0xFF15803D)],
-              stops: [0.0, 0.55, 1.0],
-            ),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-            boxShadow: [BoxShadow(color: const Color(0xFF22C55E).withValues(alpha: 0.45), blurRadius: 32, offset: const Offset(0, 12))],
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  color: Colors.white.withValues(alpha: 0.2),
-                ),
-                child: const Icon(Icons.attach_money_rounded, color: Colors.white, size: 28),
-              ),
-              const SizedBox(width: 14),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Начать продажу', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white)),
-                    SizedBox(height: 3),
-                    Text('Оформить чек и принять оплату', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Colors.white)),
-                  ],
-                ),
-              ),
-              Icon(Icons.chevron_right_rounded, color: Colors.white.withValues(alpha: 0.85)),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
