@@ -327,10 +327,10 @@ class ProfileScreenState extends State<ProfileScreen> {
       final products = await IapService.instance.loadProducts({info.productId});
       final product = products[info.productId];
       if (product == null) {
-        // Soft message for App Review / users (do not expose ASC developer steps).
         throw Exception(
-          'Оплата App Store временно недоступна. '
-          'Проверьте интернет и повторите через минуту.',
+          'Продукт пополнения не загрузился из App Store. '
+          'Проверьте Paid Apps Agreement и статус IAP '
+          '(${info.productId}) в App Store Connect.',
         );
       }
       if (!mounted) return;
@@ -365,16 +365,18 @@ class ProfileScreenState extends State<ProfileScreen> {
           }
         },
         onError: (msg) {
-          if (mounted) {
-            _snack(msg, error: true);
-            setState(() => topupLoading = false);
-          }
+          if (!mounted) return;
+          setState(() => topupLoading = false);
+          final text = _cleanMsg(msg);
+          if (text.isEmpty) return; // user cancelled
+          _snack(text, error: true);
         },
       );
     } catch (e) {
       if (mounted) {
-        _snack(_cleanMsg(e), error: true);
         setState(() => topupLoading = false);
+        final text = IapService.formatStoreKitError(e);
+        if (text.isNotEmpty) _snack(text, error: true);
       }
     }
   }

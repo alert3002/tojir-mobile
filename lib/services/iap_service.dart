@@ -32,8 +32,36 @@ class IapService {
     final ok = await _iap.isAvailable();
     if (!ok) return;
     _sub ??= _iap.purchaseStream.listen(_onPurchaseUpdate, onError: (Object e) {
-      _onError?.call(e.toString());
+      _onError?.call(formatStoreKitError(e));
     });
+  }
+
+  /// Never show raw "SKErrorDomain" to users / App Review.
+  static String formatStoreKitError(Object? error, {String? code, String? message}) {
+    final rawCode = (code ?? (error is IAPError ? error.code : '')).toString().trim();
+    final rawMsg = (message ?? (error is IAPError ? error.message : error?.toString() ?? ''))
+        .toString()
+        .trim();
+    final lower = '$rawCode $rawMsg'.toLowerCase();
+
+    if (lower.contains('cancel') || rawCode == '2' || lower.contains('paymentcancelled')) {
+      return ''; // caller treats empty as silent cancel
+    }
+    if (rawCode == '5' || lower.contains('storeproductnotavailable') || lower.contains('not available')) {
+      return 'Этот продукт сейчас недоступен в App Store. Повторите позже.';
+    }
+    if (rawCode == '4' || lower.contains('paymentnotallowed')) {
+      return 'Покупки в App Store запрещены на этом устройстве (ограничения / Screen Time).';
+    }
+    if (rawCode == '3' || lower.contains('paymentinvalid')) {
+      return 'Не удалось оформить оплату App Store. Повторите попытку.';
+    }
+    if (rawMsg.isNotEmpty &&
+        !rawMsg.toLowerCase().contains('skerrordomain') &&
+        rawMsg.toLowerCase() != 'unknown') {
+      return rawMsg;
+    }
+    return 'Не удалось завершить оплату App Store. Закройте приложение и повторите через минуту.';
   }
 
   void dispose() {
@@ -97,19 +125,32 @@ class IapService {
     }
 
     Object? lastError;
-    for (var attempt = 0; attempt < 3; attempt++) {
+    Set<String> lastMissing = {};
+    for (var attempt = 0; attempt < 4; attempt++) {
       try {
         final response = await _iap.queryProductDetails(ids);
-        if (response.error == null) {
-          return {for (final p in response.productDetails) p.id: p};
+        if (response.error != null) {
+          lastError = response.error!.message;
+        } else {
+          final found = {for (final p in response.productDetails) p.id: p};
+          lastMissing = ids.difference(found.keys.toSet());
+          // StoreKit may return success with empty list when IAP isn't ready in ASC.
+          if (found.isNotEmpty && lastMissing.isEmpty) return found;
+          if (found.isNotEmpty) return found;
+          lastError = 'products_not_found';
         }
-        lastError = response.error!.message;
       } catch (e) {
         lastError = e;
       }
-      if (attempt < 2) {
-        await Future<void>.delayed(Duration(milliseconds: 700 * (attempt + 1)));
+      if (attempt < 3) {
+        await Future<void>.delayed(Duration(milliseconds: 900 * (attempt + 1)));
       }
+    }
+    if (lastMissing.isNotEmpty || lastError?.toString() == 'products_not_found') {
+      throw Exception(
+        'Продукт App Store не загрузился (${ids.join(', ')}). '
+        'Проверьте Paid Apps Agreement и статус IAP в App Store Connect.',
+      );
     }
     throw Exception(_storeKitHint(lastError?.toString() ?? 'StoreKit error'));
   }
@@ -138,8 +179,15 @@ class IapService {
     _pendingBalance = false;
     _onSuccess = onSuccess;
     _onError = onError;
-    final param = PurchaseParam(productDetails: product);
-    await _iap.buyNonConsumable(purchaseParam: param);
+    try {
+      final param = PurchaseParam(productDetails: product);
+      final ok = await _iap.buyNonConsumable(purchaseParam: param);
+      if (!ok) {
+        onError?.call('Не удалось открыть оплату App Store. Повторите попытку.');
+      }
+    } catch (e) {
+      onError?.call(formatStoreKitError(e));
+    }
   }
 
   Future<void> purchaseBalanceTopup({
@@ -155,16 +203,37 @@ class IapService {
     _pendingBalance = true;
     _onSuccess = onSuccess;
     _onError = onError;
-    final param = PurchaseParam(productDetails: product);
-    await _iap.buyConsumable(purchaseParam: param, autoConsume: true);
+    try {
+      final param = PurchaseParam(productDetails: product);
+      final ok = await _iap.buyConsumable(purchaseParam: param, autoConsume: true);
+      if (!ok) {
+        onError?.call('Не удалось открыть оплату App Store. Повторите попытку.');
+      }
+    } catch (e) {
+      onError?.call(formatStoreKitError(e));
+    }
   }
 
   Future<void> _onPurchaseUpdate(List<PurchaseDetails> purchases) async {
     for (final purchase in purchases) {
       if (purchase.status == PurchaseStatus.pending) continue;
 
+      if (purchase.status == PurchaseStatus.canceled) {
+        _onError?.call('');
+        if (purchase.pendingCompletePurchase) {
+          await _iap.completePurchase(purchase);
+        }
+        continue;
+      }
+
       if (purchase.status == PurchaseStatus.error) {
-        _onError?.call(purchase.error?.message ?? 'Ошибка покупки Apple');
+        final err = purchase.error;
+        final msg = formatStoreKitError(
+          err,
+          code: err?.code,
+          message: err?.message,
+        );
+        _onError?.call(msg);
         if (purchase.pendingCompletePurchase) {
           await _iap.completePurchase(purchase);
         }
@@ -176,7 +245,7 @@ class IapService {
           await _verifyOnServer(purchase);
           _onSuccess?.call();
         } catch (e) {
-          _onError?.call(e.toString());
+          _onError?.call(e.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim());
         }
       }
 

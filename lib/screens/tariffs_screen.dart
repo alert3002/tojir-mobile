@@ -455,10 +455,11 @@ class _TariffsScreenState extends State<TariffsScreen> {
         if (mounted) setState(() => buyingId = null);
       },
       onError: (msg) {
-        if (mounted) {
-          _snack(msg, error: true);
-          setState(() => buyingId = null);
-        }
+        if (!mounted) return;
+        setState(() => buyingId = null);
+        final text = msg.trim();
+        if (text.isEmpty) return;
+        _snack(text, error: true);
       },
     );
   }
